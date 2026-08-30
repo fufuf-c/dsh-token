@@ -1,0 +1,24 @@
+# dsh-token CI:完整性校验 + 数据层单测 + Host 壳 e2e 冒烟。
+# 包零依赖,无需 install;Node 20/22 双版本验证(dsh 运行时基线)。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - run: node scripts/build.mjs
+      - run: node scripts/e2e-smoke.mjs

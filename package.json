@@ -1,0 +1,57 @@
+{
+  "name": "@fufuf-c/dsh-token",
+  "version": "0.3.1",
+  "description": "DSH 本地 Token 使用统计仪表盘:四段 Token 构成、缓存省钱、会话下钻、全局筛选、预算与导出。全本地,零上传。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "web",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/host-fold.test.mjs test/scan-store.test.mjs",
+    "smoke": "node scripts/e2e-smoke.mjs",
+    "dev": "node scripts/dev-server.mjs",
+    "pack": "npm pack"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "token",
+    "usage",
+    "cost",
+    "dashboard"
+  ],
+  "license": "MIT",
+  "peerDependencies": {},
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fufuf-c/dsh-token.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fufuf-c/dsh-token/issues"
+  },
+  "homepage": "https://github.com/fufuf-c/dsh-token#readme"
+}

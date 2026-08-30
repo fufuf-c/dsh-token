@@ -1,0 +1,8 @@
+# dsh-token bundle patch — 外部插件装配层。
+#
+# 安装本包并加入 dsh.profile.bundles 后,ws 启动时本 patch 作为一层叠加到
+# profile 根树(dsh-base → dsh-web-app → 各 bundle → profile cordis.patch.yml)。
+# 行格式与 dsh-base 一致:id + name(name 即包名,main 导出作为 Host 插件加载)。
+- insert:
+    - id: dsh-token
+      name: '@fufuf-c/dsh-token'
