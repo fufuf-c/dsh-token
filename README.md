@@ -33,11 +33,15 @@ DSH 本地 **Token 用量统计插件**——以 Token 为第一视角:不只回
 六个视图,截图取自一份**全虚构**的示例库(18 个会话 / 474 次请求,由
 `scripts/screenshot-harness.mjs` 用固定种子生成),不含任何真实使用记录。点图看原图。
 
+> 图片挂在 Release 资产上而不是用仓库相对路径:README 同时是 npm 页,相对路径在
+> npmjs.com 上会裂图,而 `raw.githubusercontent.com` 在部分网络环境下不可达。商店侧
+> 以仓库里的 `screenshots.json` 为准,与这里无关。
+
 |  |  |
 | :--: | :--: |
-| [![今天](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/01-today.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/01-today.png)<br>今天 · 四段构成与小时分布 | [![活动](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/02-activity.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/02-activity.png)<br>活动 · 趋势 / 逐模型 / 粒度切换 |
-| [![会话](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/03-sessions.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/03-sessions.png)<br>会话 · 排序 / 搜索 / 激增标记 | [![会话详情](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/04-session-detail.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/04-session-detail.png)<br>会话详情 · 指标 / 构成 / 增长曲线 |
-| [![逐请求时间线](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/05-session-growth.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/05-session-growth.png)<br>逐请求时间线 · 明细表 | [![设置](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/06-settings.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/06-settings.png)<br>设置 · 预算 / 单价 / 高峰时段 |
+| [![今天](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-01-today.png)](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-01-today.png)<br>今天 · 四段构成与小时分布 | [![活动](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-02-activity.png)](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-02-activity.png)<br>活动 · 趋势 / 逐模型 / 粒度切换 |
+| [![会话](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-03-sessions.png)](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-03-sessions.png)<br>会话 · 排序 / 搜索 / 激增标记 | [![会话详情](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-04-session-detail.png)](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-04-session-detail.png)<br>会话详情 · 指标 / 构成 / 增长曲线 |
+| [![逐请求时间线](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-05-session-growth.png)](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-05-session-growth.png)<br>逐请求时间线 · 明细表 | [![设置](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-06-settings.png)](https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/shot-06-settings.png)<br>设置 · 预算 / 单价 / 高峰时段 |
 
 ## 架构
 
