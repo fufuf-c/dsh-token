@@ -49,14 +49,16 @@ function eventsFor(model = 'deepseek-chat', provider = 'deepseek-official') {
   return [
     { type: 'request/header', seq: 1, time: T, data: { header: { config: { provider, model } } } },
     { type: 'request/context', seq: 2, time: T, data: { provider, model } },
-    // 约定 A:inputTokens 已含缓存读(Anthropic 型) → miss = input - read
-    { type: 'assistant/message', seq: 3, time: T + 1000, data: { turn: 1, step: 1, usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 300, cacheWriteTokens: 0 } } },
-    // 约定 B:inputTokens 不含缓存读(DeepSeek 型) → floor 保护
-    { type: 'assistant/message', seq: 4, time: T + 2000, data: { turn: 1, step: 2, usage: { inputTokens: 200, outputTokens: 30, cacheReadTokens: 4000, reasoningTokens: 10 } } },
+    // 现行口径(0.1.5-rc.2 起):四段互斥,total = input + read + write + out → miss = input
+    { type: 'assistant/message', seq: 3, time: T + 1000, data: { turn: 1, step: 1, usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 300, cacheWriteTokens: 0, totalTokens: 1350 } } },
+    // 大命中场景:input(200) 远小于 cacheRead(4000),miss 仍是 input 本身
+    { type: 'assistant/message', seq: 4, time: T + 2000, data: { turn: 1, step: 2, usage: { inputTokens: 200, outputTokens: 30, cacheReadTokens: 4000, reasoningTokens: 10, totalTokens: 4230 } } },
     // 同 turn/step 重复 → 去重
     { type: 'assistant/message', seq: 5, time: T + 3000, data: { turn: 1, step: 1, usage: { inputTokens: 99999, outputTokens: 999, cacheReadTokens: 999, cacheWriteTokens: 999 } } },
     // 无 usage → 跳过
     { type: 'assistant/message', seq: 6, time: T + 4000, data: { turn: 1, step: 3, message: { role: 'assistant', content: [] }, source: {} } },
+    // 极老日志的折叠口径(total = input + out,且 input 已含缓存)→ 回退相减
+    { type: 'assistant/message', seq: 7, time: T + 5000, data: { turn: 1, step: 4, usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 300, totalTokens: 1050 } } },
   ]
 }
 
@@ -80,15 +82,21 @@ function buildStore() {
 
 test('foldSession: 四段分解、模型归属、去重', () => {
   const recs = foldSession(eventsFor())
-  assert.equal(recs.length, 2)
+  assert.equal(recs.length, 3)
+  // 互斥口径:miss 直接取 inputTokens
   assert.deepEqual(
     { miss: recs[0].miss, read: recs[0].read, write: recs[0].write, out: recs[0].out },
-    { miss: 700, read: 300, write: 0, out: 50 },
+    { miss: 1000, read: 300, write: 0, out: 50 },
   )
-  // 约定 B:input(200) < cacheRead(4000) → floor 后 miss=200,read 保留 4000
+  // 大命中:input(200) < cacheRead(4000),miss 仍是 200(不再被相减吞掉)
   assert.deepEqual(
     { miss: recs[1].miss, read: recs[1].read, out: recs[1].out, r: recs[1].r },
     { miss: 200, read: 4000, out: 30, r: 10 },
+  )
+  // 折叠口径兼容:total = input + out → miss = input - read - write
+  assert.deepEqual(
+    { miss: recs[2].miss, read: recs[2].read, write: recs[2].write, out: recs[2].out },
+    { miss: 700, read: 300, write: 0, out: 50 },
   )
   assert.equal(recs[0].m, 'deepseek-official:deepseek-chat')
 })
@@ -170,6 +178,80 @@ test('series/hours/sessions/detail 形状', () => {
   assert.equal(d.anomalies, 0)
   const d2 = sessionDetailQuery(store, 'b')
   assert.equal(d2.flags.filter((f) => f === 2).length, 1, '中断标记')
+})
+
+test('会话下钻 brief 模式:省掉逐请求数组,汇总照旧', () => {
+  const store = buildStore()
+  const full = sessionDetailQuery(store, 'a')
+  const brief = sessionDetailQuery(store, 'a', { brief: true })
+  // 汇总字段一个不少
+  for (const k of ['id', 'meta', 'totals', 'models', 'requestCount', 'anomalies', 'flagged', 'firstTs', 'lastTs']) {
+    assert.deepEqual(brief[k], full[k], `brief 不应改变 ${k}`)
+  }
+  // 逐请求数据被省掉(会话内面板只要汇总)
+  assert.ok(Array.isArray(full.requests) && full.requests.length === 2)
+  assert.equal(brief.requests, undefined)
+  assert.equal(brief.flags, undefined)
+  // payload 体积应显著更小
+  assert.ok(JSON.stringify(brief).length < JSON.stringify(full).length)
+  // 不存在的会话仍然是 null
+  assert.equal(sessionDetailQuery(store, 'nope', { brief: true }), null)
+})
+
+test('会话下钻:面板用的节奏字段(逐小时 / 分档 / 逐段费用)', () => {
+  const store = buildStore()
+  const d = sessionDetailQuery(store, 'a', { brief: true })
+  const total = d.totals.miss + d.totals.read + d.totals.write + d.totals.out
+  assert.equal(d.hours.length, 24, '逐小时分布固定 24 桶')
+  assert.equal(d.hours.reduce((s, v) => s + v, 0), total, '逐小时之和 = 总 tokens')
+  assert.equal(d.hoursPeak.length, 24)
+  assert.equal(d.hoursPeak.reduce((s, v) => s + v, 0), d.tiers.peak.tokens, '高峰桶之和 = 高峰 tokens')
+  assert.ok(d.hours.every((v, i) => d.hoursPeak[i] <= v), '某小时的高峰量不可能超过该小时总量')
+  assert.equal(d.tiers.peak.tokens + d.tiers.idle.tokens, total, '两档之和 = 总 tokens')
+  assert.equal(d.tiers.peak.requests + d.tiers.idle.requests, d.requestCount, '两档请求数之和 = 请求总数')
+  assert.equal(d.activeDays, new Set(store.requests['a'].map((r) => dayKeyOf(r.t))).size)
+  assert.deepEqual(d.schedule, { hours: [[9, 12], [14, 18]], days: [1, 2, 3, 4, 5] }, '规则随响应下发,供面板原样展示')
+
+  // 逐段费用必须能对上总费用(同一套单价、同一档)
+  const parts = d.costParts.miss + d.costParts.read + d.costParts.write + d.costParts.out
+  assert.ok(Math.abs(parts - d.totals.cost) <= 1e-9 * Math.max(1, d.totals.cost), `四段费用之和应等于总费用:${parts} vs ${d.totals.cost}`)
+  assert.equal(d.unpriced, 0, '有价的会话不该有未定价 tokens')
+
+  // 这就是"钱花在哪一段"的价值:缓存命中占了绝大多数 token,却只占极小一笔钱
+  const readTokenShare = (d.totals.read) / total
+  const readCostShare = d.costParts.read / d.totals.cost
+  assert.ok(readTokenShare > 0.7, `缓存命中应占大头 tokens(实际 ${(readTokenShare * 100).toFixed(1)}%)`)
+  assert.ok(readCostShare < 0.2, `缓存命中的费用占比应远小于 token 占比(实际 ${(readCostShare * 100).toFixed(1)}%)`)
+})
+
+test('会话下钻:未定价模型计成 unpriced,不混进费用', () => {
+  const store = buildStore()
+  const d = sessionDetailQuery(store, 'b', { brief: true })
+  const total = d.totals.miss + d.totals.read + d.totals.write + d.totals.out
+  assert.equal(d.unpriced, total, '整条会话都未定价')
+  assert.equal(d.costParts.miss + d.costParts.read + d.costParts.write + d.costParts.out, 0)
+  assert.equal(d.tiers.peak.tokens + d.tiers.idle.tokens, total)
+})
+
+test('会话下钻:小时桶按北京时间,与高峰分档同一口径(宿主时区无关)', () => {
+  const store = emptyStore()
+  store.sessions['z'] = session('z')
+  // 2026-08-26 是周三:02:00Z = 北京 10:00(高峰),14:00Z = 北京 22:00(空闲)
+  const am = Date.parse('2026-08-26T02:00:00Z')
+  const pm = Date.parse('2026-08-26T14:00:00Z')
+  store.requests['z'] = [
+    { seq: 1, t: am, m: 'deepseek-official:deepseek-chat', miss: 100, read: 0, write: 0, out: 0, r: 0, i: 0 },
+    { seq: 2, t: pm, m: 'deepseek-official:deepseek-chat', miss: 100, read: 0, write: 0, out: 0, r: 0, i: 0 },
+  ]
+  rebuildAll(store)
+  const d = sessionDetailQuery(store, 'z', { brief: true })
+  assert.equal(d.hours[10], 100, '02:00Z 落在北京时间 10 点桶')
+  assert.equal(d.hours[22], 100, '14:00Z 落在北京时间 22 点桶')
+  assert.equal(d.hoursPeak[10], 100, '周三 10 点是高峰')
+  assert.equal(d.hoursPeak[22], 0, '22 点不是高峰')
+  assert.equal(d.tiers.peak.tokens, 100)
+  assert.equal(d.tiers.idle.tokens, 100)
+  assert.equal(d.hours.reduce((s, v) => s + v, 0), 200)
 })
 
 test('导出 CSV/JSON', () => {

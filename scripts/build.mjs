@@ -2,11 +2,13 @@
  * dsh-token — 完整性校验(免构建):
  * 1. 关键文件存在;2. package.json dsh 字段合法;3. 三个模块可解析
  * (core 直接 import 并跑一次空 store 冒烟;client 在无 window 环境应仅报
- * ReferenceError 而非语法错误;index 可 import 且导出 name/apply)。
+ * ReferenceError 而非语法错误;index 可 import 且导出 name/apply);
+ * 4. web/index.html 内联脚本语法(2184 行 JS 嵌在 HTML 里,否则只有浏览器会报)。
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import vm from 'node:vm'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dir, '..')
@@ -56,6 +58,24 @@ try {
   if (e instanceof SyntaxError || /SyntaxError/.test(String(e))) fail(`lib/client.js syntax: ${e.message}`)
   else ok('lib/client.js 语法通过(运行时按预期缺 window)')
 }
+
+// 7. web/index.html 内联脚本语法(不执行,只编译)
+try {
+  const html = readFileSync(join(root, 'web/index.html'), 'utf8')
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi
+  let m, n = 0
+  while ((m = re.exec(html))) {
+    const attrs = m[1] || ''
+    if (/\bsrc\s*=/i.test(attrs)) continue
+    const tm = /type\s*=\s*["']?([^"'\s>]+)/i.exec(attrs)
+    if (tm && !/^(text\/javascript|module|application\/javascript)$/i.test(tm[1])) continue
+    n++
+    try { new vm.Script(m[2], { filename: `web/index.html inline#${n}` }) }
+    catch (e) { throw new Error(`inline#${n}: ${e.message}`) }
+  }
+  if (!n) fail('web/index.html 未找到内联脚本(页面被改坏了?)')
+  else ok(`web/index.html 内联脚本语法通过(${n} 段)`)
+} catch (e) { fail(`web/index.html 内联脚本: ${e.message}`) }
 
 if (process.exitCode) {
   console.error('\nbuild 校验未全部通过')

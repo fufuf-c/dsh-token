@@ -257,13 +257,34 @@ canvas.chart{width:100%;display:block}
 .prow:not(:last-child)::after{content:'';position:absolute;left:6px;right:0;bottom:-1px;height:1px;background:var(--hairline-2)}
 .prow .phead{display:flex;align-items:center;gap:8px}
 .prow .phead .pmodel{font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.prow .pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.prow .pgrid{display:grid;grid-template-columns:26px repeat(4,1fr);gap:8px}
+.prow .ptag{align-self:end;padding-bottom:9px;font-size:9.5px;color:var(--text-3);font-weight:600;letter-spacing:.5px}
 .pcell{display:flex;flex-direction:column;gap:3px;min-width:0}
 .pcell em{font-style:normal;font-size:9.5px;color:var(--text-3);font-weight:500}
 .pcell .inp{width:100%;height:30px;text-align:right;font-variant-numeric:tabular-nums;padding:0 8px;font-size:12px}
 .budget-bar{height:6px;border-radius:3px;background:var(--chip);overflow:hidden;margin-top:7px}
 .budget-bar i{display:block;height:100%;border-radius:3px}
 .barrowbtn{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;color:var(--accent)}
+
+/* ============ 高峰时段:点选式(沿用热力图单元格语言,不要求手输格式) ============ */
+.setrow .fill{flex-basis:100%;min-width:0}
+.sl em{font-style:normal;font-size:11.5px;color:var(--text-3);margin-left:5px}
+.daychips{display:flex;gap:6px}
+.daychips button{flex:1;min-width:0;height:34px;border-radius:11px;background:var(--chip);color:var(--text-2);font-size:12.5px;font-weight:600;transition:background .16s ease-out,color .16s ease-out,transform .14s ease-out}
+.daychips button:hover{color:var(--text)}
+.daychips button:active{transform:scale(.94)}
+.daychips button.on{background:var(--accent);color:#fff;box-shadow:0 1px 4px rgba(0,122,255,.3)}
+.hrgrid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px}
+.hrgrid button{height:28px;border-radius:8px;background:var(--chip);color:var(--text-3);font-size:9.5px;font-weight:600;font-variant-numeric:tabular-nums;transition:background .16s ease-out,color .16s ease-out,transform .14s ease-out}
+.hrgrid button:hover{color:var(--text)}
+.hrgrid button:active{transform:scale(.9)}
+.hrgrid button.on{background:var(--accent);color:#fff;box-shadow:0 1px 4px rgba(0,122,255,.3)}
+.peak-sum{font-size:12px;color:var(--text-2);line-height:1.65}
+.peak-sum b{color:var(--text);font-weight:600}
+.peak-presets{display:flex;gap:6px;margin-left:auto}
+.peak-presets button{padding:6px 12px;border-radius:980px;background:var(--chip);color:var(--text-2);font-size:12px;font-weight:600;transition:background .16s ease-out,color .16s ease-out,transform .14s ease-out}
+.peak-presets button:hover{background:var(--accent-soft);color:var(--accent)}
+.peak-presets button:active{transform:scale(.95)}
 
 /* ============ 热力图 ============ */
 .heat-scroll{overflow-x:auto;padding-bottom:6px}
@@ -596,11 +617,12 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
     hmMode: 'day', sSort: 'recent',
     search: '',
     theme: localStorage.getItem('dsh-token-theme') || 'auto',
-    hidden: {}, stkSel: null,
+    hidden: {}, stkSel: null, modelsAll: false,
     meta: null, config: null,
     today: null, hoursToday: null, sessToday: null,
     kpiAct: null, _series: null, _hours: null, _heat: null,
     kpiAll: null, costTop: null, sessionsList: null,
+    kpiMonth: null,
     pushed: false,
   };
   var RANGE_LABELS = { today: '今天', '7d': '近 7 天', '30d': '近 30 天', month: '本月', all: '全部时间', custom: '自定义' };
@@ -1443,22 +1465,97 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
       '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></button></div></section>';
 
     /* 模型单价 */
-    var models = meta.models || [];
+    // 这是**配置面**,所以只列「当前仍配置在 DSH 里」∪「已自定义单价」的模型。
+    // 原因:模型清单本身来自历史用量,只增不减 —— 你在 DSH 里删掉配置后历史账单还在,
+    // 列表不会缩;而"最近 N 天用过"也区分不出已删配置(删除往往紧跟在近期使用之后)。
+    // 已自定义单价的模型必须保留 —— 否则它的历史成本会掉回家族默认价,那才是丢归因。
+    // 历史用量/导出/会话下钻一概不受影响,这里过滤的只是"谁占配置表位"。
     var prices = cfg.prices || {};
+    // 官方默认价(含高峰/空闲两档):缺失 = 该模型没有内置价,成本按 ¥0 计。
+    // hasDefaults 区分两种"查不到":host 未升级(整个字段缺席)vs 该模型确实无内置价 ——
+    // 页面按 mtime 热更新、host 需重启,两者可能短暂不同步,此时必须退回旧标签而不是误报"未定价"。
+    var hasDefaults = !!(cfg.defaults && typeof cfg.defaults === 'object');
+    var defaults = hasDefaults ? cfg.defaults : {};
+    var allModels = meta.models || [];
+    // configuredModels 为 null/空 = host 读不到 DSH 配置 → **关闭过滤**退回显示全部
+    var configured = meta.configuredModels;
+    var filterOn = !!(configured && ((configured.exact || []).length + (configured.byId || []).length));
+    var exactSet = {}, byIdSet = {};
+    if (configured) {
+      (configured.exact || []).forEach(function (k) { exactSet[k] = 1; });
+      (configured.byId || []).forEach(function (k) { byIdSet[k] = 1; });
+    }
+    var isConfigured = function (mk) {
+      if (!filterOn) return true;
+      if (exactSet[mk]) return true;
+      var i = mk.indexOf(':');
+      return !!byIdSet[i >= 0 ? mk.slice(i + 1) : mk];
+    };
+    var inUseModels = allModels.filter(function (mk) { return isConfigured(mk) || prices[mk]; });
+    var models = (state.modelsAll || !filterOn) ? allModels : inUseModels;
+    var hiddenN = allModels.length - inUseModels.length;
+    var showToggle = filterOn && (hiddenN > 0 || state.modelsAll);
+
     html += '<div class="gtitle">模型单价 · ¥ / 1M tokens</div><section class="card group">';
-    if (!models.length) html += emptyHTML('暂无模型记录', '');
+    // 提示写在功能界面最上面
+    html += '<div class="sl" style="font-size:12px;color:var(--text-2);line-height:1.6;padding:2px 0 8px">' +
+      '单价按<b>时段</b>浮动:高峰与空闲分别计价。留空即用该模型的内置价;<b>高峰时段/高峰日只是当前官方策略,可自行修改</b>,改动会立刻重算全部历史成本。</div>';
+    // 时段规则(可配置,不写死)。defaultsSchedule 是"host 支持本特性"的可靠标志:
+    // 页面热更新、host 需重启,中间态可能只有 defaults/schedule 而没有它 —— 此时
+    // 若渲染控件,「官方默认」预设会读到 undefined 而变成清空,是破坏性误操作。
+    var hasSchedule = hasDefaults && !!(cfg.defaultsSchedule && Array.isArray(cfg.defaultsSchedule.hours));
+    if (hasSchedule) {
+      var DAY_ORDER = [1, 2, 3, 4, 5, 6, 0], DAY_LABEL = { 0: '日', 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六' };
+      var selH = {}, selD = {};
+      (cfg.schedule.hours || []).forEach(function (r) { for (var i = r[0]; i < r[1]; i++) selH[i] = 1; });
+      (cfg.schedule.days || []).forEach(function (d) { selD[d] = 1; });
+      var daysHTML = DAY_ORDER.map(function (d) {
+        return '<button data-d="' + d + '" class="' + (selD[d] ? 'on' : '') + '" aria-pressed="' + (selD[d] ? 'true' : 'false') + '" aria-label="周' + DAY_LABEL[d] + '">' + DAY_LABEL[d] + '</button>';
+      }).join('');
+      var hoursHTML = '';
+      for (var h = 0; h < 24; h++) {
+        hoursHTML += '<button data-h="' + h + '" class="' + (selH[h] ? 'on' : '') + '" aria-pressed="' + (selH[h] ? 'true' : 'false') + '" aria-label="' + pad2(h) + ':00 高峰">' + h + '</button>';
+      }
+      html += '<div class="setrow stack"><span class="sl">高峰日</span>' +
+        '<div class="fill daychips" id="peak-days" role="group" aria-label="高峰日">' + daysHTML + '</div></div>' +
+        '<div class="setrow stack"><span class="sl">高峰时段<em>北京时间,按小时点选</em></span>' +
+        '<div class="fill hrgrid" id="peak-hours" role="group" aria-label="高峰时段">' + hoursHTML + '</div>' +
+        // 摘要直接渲染出来(而不是等 JS 回填),避免首帧空白
+        '<div class="fill peak-sum" id="peak-summary">' + peakSummaryText(selH, selD) + '</div></div>' +
+        '<div class="setrow"><span class="sl">快捷</span>' +
+        '<div class="peak-presets">' +
+        '<button id="peak-preset-official">官方默认</button>' +
+        '<button id="peak-preset-all">全天</button>' +
+        '<button id="peak-preset-none">清空</button></div></div>';
+    }
+    if (!models.length) html += emptyHTML('没有需要配置单价的模型', allModels.length ? '当前配置里的模型都还没有用量记录' : '');
     else {
       models.forEach(function (mk) {
-        var p = prices[mk] || {};
-        html += '<div class="prow"><div class="phead"><span class="pmodel mono">' + esc(mk) + '</span>' +
-          (prices[mk] ? '<span class="pill">自定义</span>' : '<span class="pill" style="opacity:.6">官方价</span>') + '</div>' +
-          '<div class="pgrid">' +
-          pcell(mk, 'miss', '未命中', p.miss, '2') + pcell(mk, 'hit', '命中', p.hit, '0.5') +
-          pcell(mk, 'write', '写入', p.write, '0') + pcell(mk, 'output', '输出', p.output, '8') +
-          '</div></div>';
+        var e = prices[mk] || null, d = defaults[mk] || null;
+        var pk = (e && e.peak) || {}, idl = (e && e.idle) || {};
+        var ph = function (t, f) { return d ? String(d[t][f]) : ''; };
+        var pill = e ? '<span class="pill">自定义</span>'
+          : (!hasDefaults || d) ? '<span class="pill" style="opacity:.6">官方价</span>'
+          : '<span class="pill" style="opacity:.6">未定价 · 按 ¥0 计</span>';
+        var tierRow = function (t, name, vals) {
+          return '<div class="pgrid"><span class="ptag">' + name + '</span>' +
+            pcell(mk, t, 'miss', '未命中', vals.miss, ph(t, 'miss')) + pcell(mk, t, 'hit', '命中', vals.hit, ph(t, 'hit')) +
+            pcell(mk, t, 'write', '写入', vals.write, ph(t, 'write')) + pcell(mk, t, 'output', '输出', vals.output, ph(t, 'output')) +
+            '</div>';
+        };
+        html += '<div class="prow"><div class="phead"><span class="pmodel mono">' + esc(mk) + '</span>' + pill + '</div>' +
+          tierRow('peak', '高峰', pk) + tierRow('idle', '空闲', idl) + '</div>';
       });
     }
-    html += '<div class="setrow"><span class="sl grow"></span><button class="barrowbtn" id="b-price-reset">恢复官方价</button></div></section>';
+    var priceNote = !allModels.length ? ''
+      : !filterOn ? '读不到 DSH 模型配置,已显示全部 ' + allModels.length + ' 个'
+      : state.modelsAll ? '显示全部 ' + allModels.length + ' 个模型'
+      : hiddenN > 0 ? '已隐藏 ' + hiddenN + ' 个已不再配置的模型'
+      : '全部 ' + allModels.length + ' 个模型都还在配置里';
+    html += '<div class="setrow">' +
+      '<span class="sl" style="flex:1;min-width:0;font-size:12px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(priceNote) + '</span>' +
+      (showToggle ? '<button class="barrowbtn" id="b-models-all">' + (state.modelsAll ? '只看配置中的' : '显示全部 (' + allModels.length + ')') + '</button>' : '') +
+      '<button class="barrowbtn" id="b-price-reset">恢复官方价</button></div></section>';
 
     /* 数据 */
     html += '<div class="gtitle">数据</div><section class="card group">' +
@@ -1475,7 +1572,7 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
       '<div class="setrow"><span class="sl">覆盖范围</span><span class="sv">' + esc(meta.dayCount) + ' 天 · ' + esc(meta.monthCount) + ' 个月</span></div>' +
       '<div class="setrow"><span class="sl">最近扫描</span><span class="sv">' + (s.lastScanAt ? fmtDate(s.lastScanAt) + ' · ' : '') + (ls.durationMs || 0) + ' ms · 变更 ' + (ls.changed || 0) + '/' + (ls.totalSessions || 0) + '</span></div>' +
       '<div class="setrow"><span class="sl">扫描累计</span><span class="sv">全量 ' + (s.fullScans || 0) + ' · 增量 ' + (s.incrementalScans || 0) + ' · 失败 ' + (s.failedSessions || 0) + '</span></div>' +
-      '<div class="setrow stack"><span class="sl">模型(' + models.length + ')</span><span class="sv" style="font-size:11px">' + models.map(esc).join(' · ') + '</span></div>' +
+      '<div class="setrow stack"><span class="sl">模型(' + (models.length === allModels.length ? models.length : models.length + ' / ' + allModels.length) + ')</span><span class="sv" style="font-size:11px">' + models.map(esc).join(' · ') + '</span></div>' +
       '<div class="setrow"><span class="sl">版本</span><span class="sv">' + (meta.version ? 'v' + esc(meta.version) : '—') + '</span></div></section>';
 
     body.innerHTML = html;
@@ -1511,21 +1608,86 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
       inp.onchange = function () {
         if (priceTimer) clearTimeout(priceTimer);
         priceTimer = setTimeout(function () {
-          var prices = JSON.parse(JSON.stringify((state.config || {}).prices || {}));
+          var prev = (state.config || {}).prices || {};
+          var next = JSON.parse(JSON.stringify(prev));
+          // 只重建"当前渲染出来"的模型,被筛选隐藏的覆盖必须原样保留
+          var rendered = {};
+          body.querySelectorAll('.prow input').forEach(function (i2) { rendered[i2.getAttribute('data-m')] = 1; });
+          Object.keys(rendered).forEach(function (m) { delete next[m]; });
           body.querySelectorAll('.prow input').forEach(function (i2) {
-            var m = i2.getAttribute('data-m'), f = i2.getAttribute('data-f'), v = i2.value.trim();
-            prices[m] = prices[m] || {};
-            if (v === '') delete prices[m][f];
-            else { var n = Number(v); if (isFinite(n) && n >= 0) prices[m][f] = n; }
-            if (!Object.keys(prices[m]).length) delete prices[m];
+            var v = i2.value.trim();
+            if (v === '') return;
+            var n = Number(v);
+            if (!isFinite(n) || n < 0) return;
+            var m = i2.getAttribute('data-m'), t = i2.getAttribute('data-t'), f = i2.getAttribute('data-f');
+            var e = next[m] || (next[m] = { peak: {}, idle: {} });
+            e[t][f] = n;
           });
-          post('/config', { prices: prices }).then(function () {
+          Object.keys(rendered).forEach(function (m) {
+            var e = next[m];
+            if (!e) { if (prev[m]) next[m] = null; return } // 清空 = 删除覆盖,回到官方价
+            // 只填了一档 → 另一档跟随(不分时段的常见用法)
+            if (!Object.keys(e.peak).length) e.peak = e.idle;
+            if (!Object.keys(e.idle).length) e.idle = e.peak;
+            if (!Object.keys(e.peak).length) delete next[m];
+          });
+          post('/config', { prices: next }).then(function () {
             toast('单价已保存');
-            get('/meta').then(function (m) { state.meta = m; });
+            get('/config').then(function (c) { state.config = c; });
           }).catch(function (e) { toast('保存单价失败: ' + e.message); });
         }, 400);
       };
     });
+    // 高峰时段/高峰日:点选即存(去抖),没有"保存"这一步
+    var hGrid = $('peak-hours'), dGrid = $('peak-days');
+    if (hGrid && dGrid && cfg.schedule) {
+      var selH = {}, selD = {};
+      (cfg.schedule.hours || []).forEach(function (r) { for (var i = r[0]; i < r[1]; i++) selH[i] = 1; });
+      (cfg.schedule.days || []).forEach(function (d) { selD[d] = 1; });
+      var sumEl = $('peak-summary');
+      var peakTimer = null;
+      var peakPush = function () {
+        if (sumEl) sumEl.innerHTML = peakSummaryText(selH, selD);
+        if (peakTimer) clearTimeout(peakTimer);
+        peakTimer = setTimeout(function () {
+          post('/config', { peakHours: peakRangesOf(selH), peakDays: peakDaysOf(selD) })
+            .then(function (c) { state.config = c; toast('高峰时段已更新,历史成本已重算'); })
+            .catch(function (e) { toast('保存失败: ' + e.message); });
+        }, 500);
+      };
+      var peakToggle = function (btn, attr, sel) {
+        btn.onclick = function () {
+          var v = Number(btn.getAttribute(attr));
+          var on = !sel[v];
+          if (on) sel[v] = 1; else delete sel[v];
+          btn.classList.toggle('on', on);
+          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          peakPush();
+        };
+      };
+      hGrid.querySelectorAll('button').forEach(function (b) { peakToggle(b, 'data-h', selH); });
+      dGrid.querySelectorAll('button').forEach(function (b) { peakToggle(b, 'data-d', selD); });
+      // 就地改写 selH/selD —— 上面每个按钮的闭包都抓着这两个对象
+      var peakPreset = function (hours, days) {
+        Object.keys(selH).forEach(function (k) { delete selH[k]; });
+        Object.keys(selD).forEach(function (k) { delete selD[k]; });
+        hours.forEach(function (r) { for (var i = r[0]; i < r[1]; i++) selH[i] = 1; });
+        days.forEach(function (d) { selD[d] = 1; });
+        hGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', !!selH[Number(b.getAttribute('data-h'))]); });
+        dGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', !!selD[Number(b.getAttribute('data-d'))]); });
+        peakPush();
+      };
+      var pOfficial = $('peak-preset-official'), pAll = $('peak-preset-all'), pNone = $('peak-preset-none');
+      if (pOfficial) pOfficial.onclick = function () { var ds = cfg.defaultsSchedule || {}; peakPreset(ds.hours || [], ds.days || []); };
+      if (pAll) pAll.onclick = function () { peakPreset([[0, 24]], [0, 1, 2, 3, 4, 5, 6]); };
+      if (pNone) pNone.onclick = function () { peakPreset([], []); };
+      peakPush();
+    }
+    var modelsAllBtn = $('b-models-all');
+    if (modelsAllBtn) modelsAllBtn.onclick = function () {
+      state.modelsAll = !state.modelsAll;
+      renderSettings();
+    };
     $('b-price-reset').onclick = function () {
       post('/config', { prices: null, resetPrices: true }).then(function () {
         toast('已恢复官方价');
@@ -1548,8 +1710,39 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
     $('b-export-json').onclick = function () { download('/dsh-token/api/export.json?' + new URLSearchParams(fParams()).toString(), 'dsh-token-requests.json'); };
     syncNavChrome();
   }
-  function pcell(mk, f, label, val, ph) {
-    return '<label class="pcell"><em>' + label + '</em><input class="inp" data-m="' + esc(mk) + '" data-f="' + f + '" value="' + esc(val != null ? val : '') + '" placeholder="' + ph + '" aria-label="' + esc(mk) + ' ' + label + '单价"></label>';
+  /* ---------- 高峰时段:点选集合 ↔ 区间(页面只做展示,存储仍走 core 的区间格式) ---------- */
+  var PEAK_DAY_LABEL = { 0: '日', 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六' };
+  /** {0:1,1:1,9:1,10:1} → [[0,2],[9,11]] */
+  function peakRangesOf(selH) {
+    var out = [], h = 0;
+    while (h < 24) {
+      if (!selH[h]) { h++; continue }
+      var a = h;
+      while (h < 24 && selH[h]) h++;
+      out.push([a, h]);
+    }
+    return out;
+  }
+  function peakDaysOf(selD) {
+    return Object.keys(selD).map(Number).sort(function (a, b) { return a - b; });
+  }
+  function peakDaysText(days) {
+    if (!days.length) return '';
+    if (days.length === 7) return '每天';
+    if (days.join(',') === '1,2,3,4,5') return '工作日';
+    return '周' + days.map(function (d) { return PEAK_DAY_LABEL[d]; }).join('、');
+  }
+  /** 把点选结果翻成一句人话,让用户确认自己选对了 */
+  function peakSummaryText(selH, selD) {
+    var hrs = peakRangesOf(selH), days = peakDaysOf(selD);
+    if (!hrs.length || !days.length) return '当前没有高峰时段 —— 全部用量都按<b>空闲价</b>计。';
+    var t = hrs.map(function (r) { return pad2(r[0]) + ':00–' + pad2(r[1]) + ':00'; }).join('、');
+    var n = hrs.reduce(function (s, r) { return s + (r[1] - r[0]); }, 0) * days.length;
+    return '<b>' + peakDaysText(days) + '</b> ' + t + ' 为高峰 · 每周 <b>' + n + ' 小时</b> · 北京时间';
+  }
+  function pcell(mk, tier, f, label, val, ph) {
+    // ph 来自服务端 defaults,一律转义(旧版是硬编码字面量)
+    return '<label class="pcell"><em>' + label + '</em><input class="inp" data-m="' + esc(mk) + '" data-t="' + tier + '" data-f="' + f + '" value="' + esc(val != null ? val : '') + '" placeholder="' + esc(ph) + '" aria-label="' + esc(mk) + (tier === 'peak' ? ' 高峰' : ' 空闲') + label + '单价"></label>';
   }
   function download(url, name) {
     fetch(url, { cache: 'no-store' }).then(function (r) {
@@ -1954,10 +2147,12 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
         .catch(function (e) { toast('加载失败:' + e.message); });
     }
     if (tab === 'settings') {
+      // 这次 KPI **刻意不带当前筛选**:月度预算是整月总账,不该因为筛了某个模型
+      // 就只统计那个模型(原先带 fParams 会,属 bug)。
       return Promise.all([
         get('/meta').then(function (m) { state.meta = m; }),
         get('/config').then(function (c) { state.config = c; }),
-        get('/kpi', fParams('month')).then(function (k) { state.kpiMonth = k; })
+        get('/kpi', { range: 'month' }).then(function (k) { state.kpiMonth = k; })
       ]).then(function () { renderSettings(); }).catch(function (e) { toast('加载失败:' + e.message); });
     }
     return Promise.resolve();
@@ -2120,7 +2315,7 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
         if (!document.hidden && !state.pushed && !sheetOpen) loadTab(state.tab);
       }, 60000);
     }).catch(function (e) {
-      $('today-body').innerHTML = '<div class="card">' + emptyHTML('无法连接数据 API', e.message + ' — 请通过 dsh-token 插件或 dev-server 访问') + '</div>';
+      $('today-body').innerHTML = '<div class="card">' + emptyHTML('无法连接数据 API', e.message + ' — 请通过 dsh-token 插件页面访问') + '</div>';
     });
   }
   boot();

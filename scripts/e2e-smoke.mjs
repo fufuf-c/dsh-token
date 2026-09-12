@@ -37,9 +37,18 @@ const sessions = {
     ],
   },
 }
+// 假持久化后端按 DSH 0.1.5-rc.2 的句柄式契约:list() + open(id,'read')。
+// 旧的 listSnapshots()/readFrom() 形状由 test/scan-store.test.mjs 的旧后端假件覆盖。
 const persistence = {
-  async listSnapshots() { return Object.keys(sessions).map((id) => ({ header: { id }, revision: sessions[id].revision })) },
-  async readFrom(id) { return { events: sessions[id].events, meta: sessions[id].meta } },
+  async list() { return Object.keys(sessions).map((id) => ({ header: { id }, revision: sessions[id].revision })) },
+  async open(id) {
+    return {
+      id,
+      header: sessions[id].meta,
+      read: async () => ({ eventState: 'detached', events: sessions[id].events }),
+      close: async () => {},
+    }
+  },
   locate: (meta) => ({ path: meta.cwd || 'X:\\unknown' }),
 }
 
