@@ -86,7 +86,7 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
-body{background:var(--bg-grad), var(--bg);background-attachment:fixed;color:var(--text);font:15px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{background:var(--bg-grad), var(--bg);background-attachment:fixed;color:var(--text);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);font-size:15px;line-height:1.47;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 button,input{font:inherit;color:inherit}
 button{cursor:pointer;background:none;border:0;padding:0}
 a{color:var(--accent);text-decoration:none}
@@ -1623,7 +1623,7 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
         var seg = $('theme-seg');
         seg.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
         segSync(seg);
-        toast(state.theme === 'auto' ? '主题:跟随系统' : state.theme === 'light' ? '主题:浅色' : '主题:深色');
+        toast(themeToastText());
       };
     });
     var editRow = $('budget-edit-row');
@@ -2196,8 +2196,40 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
   }
 
   /* ================= 主题 ================= */
+  /* 「自动」= 跟随 **DSH 外观**,不是只跟随操作系统。
+     DSH 把「浅色/深色/跟随系统」存在 ui-theme 设置段里(外壳读的也是它),本页是独立文档、
+     看不到宿主的 DOM 属性,所以由宿主在发送时注入 window.__DSH_TOKEN_THEME__(见 lib/index.js)。
+     注入缺失时(例如直接以文件打开本页)退回"只跟随系统",与从前一致。 */
+  function dshThemePreference() {
+    var t = window.__DSH_TOKEN_THEME__;
+    if (!t) return null;
+    var p = t.preference;
+    return p === 'light' || p === 'dark' || p === 'system' ? p : null;
+  }
+  function osPrefersDark() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+  /* DSH 把外观钉成浅色/深色时,系统深浅与本页无关;只有 DSH 是"跟随系统"(或没有注入)才看 OS。 */
+  function autoTracksOs() {
+    var p = dshThemePreference();
+    return p !== 'light' && p !== 'dark';
+  }
+  function autoPrefersDark() {
+    var p = dshThemePreference();
+    if (p === 'dark') return true;
+    if (p === 'light') return false;
+    return osPrefersDark();
+  }
+  function themeToastText() {
+    if (state.theme === 'light') return '主题:浅色';
+    if (state.theme === 'dark') return '主题:深色';
+    var p = dshThemePreference();
+    if (p === 'light') return '主题:跟随 DSH(浅色)';
+    if (p === 'dark') return '主题:跟随 DSH(深色)';
+    return p === 'system' ? '主题:跟随 DSH(跟随系统)' : '主题:跟随系统';
+  }
   function applyTheme(animate, x, y) {
-    var dark = state.theme === 'dark' || (state.theme === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    var dark = state.theme === 'dark' || (state.theme === 'auto' && autoPrefersDark());
     var swap = function () {
       document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
       syncNavChrome();
@@ -2239,7 +2271,7 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
           state.theme = state.theme === 'auto' ? 'light' : state.theme === 'light' ? 'dark' : 'auto';
           localStorage.setItem('dsh-token-theme', state.theme === 'auto' ? '' : state.theme);
           applyTheme(true, e.clientX, e.clientY);
-          toast(state.theme === 'auto' ? '主题:跟随系统' : state.theme === 'light' ? '主题:浅色' : '主题:深色');
+          toast(themeToastText());
         };
       } else if (act === 'refresh') {
         el.onclick = function () { loadTab('activity', true); toast('已刷新'); };
@@ -2313,7 +2345,8 @@ html.theming,html.theming *{transition:background-color .6s ease,color .6s ease,
     });
     if (window.matchMedia) {
       window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
-        if (state.theme === 'auto') applyTheme(true);
+        /* DSH 把外观钉成浅色/深色时,系统深浅不影响本页,不必重绘 */
+        if (state.theme === 'auto' && autoTracksOs()) applyTheme(true);
       });
     }
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { segSyncAll(); });

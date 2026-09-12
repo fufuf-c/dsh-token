@@ -56,11 +56,15 @@ const pluginPath = fileURLToPath(new URL('../lib/index.js', import.meta.url))
 const plugin = await import(`file:///${pluginPath.replace(/\\/g, '/')}`)
 
 let routeHandler = null
+/* 外观设置桩(可改):验证「外观偏好进页面缓存键」—— 用户改了深浅色而页面文件没动,
+   注入的偏好也必须立刻换新,而不是把缓存里的旧值一直发出去。 */
+const themeSettings = { preference: 'system' }
 const ctx = {
   get(name) {
     if (name === 'sessionPersistence') return persistence
     if (name === 'webServer') return { register: (h) => { routeHandler = h.handler; return () => {} } }
     if (name === 'timer') return { interval: () => () => {} }
+    if (name === 'settings') return { get: (ns) => (ns === 'ui-theme' ? themeSettings : undefined), describe: () => [] }
     return undefined
   },
   provide: () => () => {},
@@ -93,7 +97,11 @@ const ok = (name) => { pass++; console.log(`✓ ${name}`) }
   assert.equal(raw.headers['content-encoding'], 'gzip')
   const html = gunzipSync(raw.body).toString('utf8')
   assert.ok(html.includes('dsh-token'))
-  ok(`页面 gzip(${raw.body.length} bytes 上线)`)
+  // 宿主在发送时注入外观偏好:页面据此让「自动」跟随 DSH 外观,而不是只跟随操作系统
+  const boot = '<script>window.__DSH_TOKEN_THEME__={"preference":"system"}</script>'
+  assert.ok(html.includes(boot), '页面必须带宿主注入的外观偏好引导脚本')
+  assert.ok(html.indexOf(boot) < html.indexOf('</head>'), '引导脚本必须在 head 内,先于页面自身脚本')
+  ok(`页面 gzip(${raw.body.length} bytes 上线,含外观偏好注入)`)
 }
 // 2. HEAD 无 body
 {
@@ -195,6 +203,20 @@ const ok = (name) => { pass++; console.log(`✓ ${name}`) }
   assert.ok(after.includes('<!-- e2e touch -->'), 'mtime 变化后应重新读盘')
   writeFileSync(pagePath, readFileSync(pagePath, 'utf8').replace('<!-- e2e touch -->', ''))
   ok('页面编辑后刷新即生效(mtime 失效)')
+}
+// 9b. 外观偏好进缓存键:只改 DSH 设置、不动页面文件,注入的偏好也必须跟着换
+{
+  themeSettings.preference = 'dark'
+  const dark = await (await fetch(base + '/dsh-token')).text()
+  assert.ok(dark.includes('window.__DSH_TOKEN_THEME__={"preference":"dark"}'),
+    'DSH 外观改成深色后,页面必须立刻下发新偏好(缓存键必须含偏好,否则会一直发旧值)')
+  themeSettings.preference = 'light'
+  const light = await (await fetch(base + '/dsh-token')).text()
+  assert.ok(light.includes('window.__DSH_TOKEN_THEME__={"preference":"light"}'), '偏好改回浅色同样立刻生效')
+  themeSettings.preference = 'system'
+  const back = await (await fetch(base + '/dsh-token')).text()
+  assert.ok(back.includes('window.__DSH_TOKEN_THEME__={"preference":"system"}'), '跟随系统同样立刻生效')
+  ok('外观偏好变更即生效(页面缓存按偏好失效)')
 }
 // 10. 404
 {

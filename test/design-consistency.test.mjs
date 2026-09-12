@@ -8,8 +8,10 @@
  *      `bg-grad`、`text2` 实为 `text-2`),若被自动 kebab 化,生成的是一批
  *      **从未被引用**的变量名 —— 界面会静默丢掉全部配色,而语法检查毫无察觉;
  *   3. **引用闭合**:两个文件里所有 `var(--x)` 都能在文件内找到声明。这是 2 的兜底,
- *      也是"改个变量名顺手漏改引用处"的网。DSH 外壳提供的 `--dsw-alias-*` 属于外部
- *      契约,不在本文件声明,故排除。
+ *      也是"改个变量名顺手漏改引用处"的网。DSH 外壳提供的 `--dsw-*`(主题 token)与
+ *      `--dsh-*`(外壳运行参数,如内容字号)属于外部契约,不在本文件声明,故排除;
+ *   4. **宿主适配不回退**:面板必须接宿主的字体族与正文字号变量,而不是抄一份固定值 ——
+ *      抄死的值会在用户改「外观」时静默无视设置,且宿主换字体时漂移。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -69,7 +71,10 @@ function referencedNames(src) {
   const re = /var\(\s*(--[A-Za-z0-9_-]+)/g
   let m
   while ((m = re.exec(src))) {
-    if (m[1].startsWith('--dsw-')) continue
+    // 宿主契约,由 DSH 声明、不在这两个文件里,故不参与"引用闭合":
+    //   --dsw-*  主题 token(调色板 / alias 语义色 / 字体族)
+    //   --dsh-*  外壳自身的运行参数(如内容字号 --dsh-content-font-size / -delta)
+    if (m[1].startsWith('--dsw-') || m[1].startsWith('--dsh-')) continue
     out.add(m[1])
   }
   return out
@@ -146,4 +151,44 @@ test('设计 token:语义 key 在两边都有名字映射(缺映射会抛出而�
     assert.match(varName('client', key), /^--d-[a-z0-9-]+$/)
     assert.ok(TOKENS.light[key] !== undefined && TOKENS.dark[key] !== undefined, `${key} 必须有浅色与深色两档`)
   }
+})
+
+/**
+ * 取出某条规则体:选择器必须出现在**行首 / `;` / `}` 之后**(允许空白),
+ * 紧跟 `{`。这样 `.dtk-app{` 取的是浅色那条基础规则,而不是
+ * `body[data-ds-dark-theme] .dtk-app{`;`body{` 取的也不是 `html,body{`。
+ */
+function ruleBody(src, selector) {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const m = new RegExp(`(?:^|[\\n;}])\\s*${esc}\\{`).exec(src)
+  assert.ok(m, `找不到规则 ${selector}`)
+  const end = src.indexOf('}', m.index + m[0].length)
+  assert.ok(end >= 0, `规则 ${selector} 未闭合`)
+  return src.slice(m.index + m[0].length, end)
+}
+
+/**
+ * 宿主适配不能靠"抄一份值"——抄下来的字号/字体/底色会在用户改「外观」或宿主换主题时
+ * 静默失效(面板看起来还在,只是不再跟随)。这几条锁住"接"而不是"抄"。
+ */
+test('宿主适配:会话面板接宿主字体族 / 正文字号 / 底色,不写死固定值', () => {
+  const panel = ruleBody(read('lib/client.js'), '.dtk-app')
+  assert.match(panel, /font-family:var\(--dsw-font-family,/,
+    '面板字体族必须接 --dsw-font-family(宿主留给主题覆写的钩子),而不是抄一份栈')
+  assert.match(panel, /font-size:var\(--dsh-content-font-size,/,
+    '面板正文字号必须接 --dsh-content-font-size,否则用户改「外观」里的字号时面板无反应')
+  assert.match(panel, /line-height:calc\(24px \+ var\(--dsh-content-font-delta,0px\)\)/,
+    '行高必须走宿主的 delta 口径,才能随字号同步变化')
+  assert.doesNotMatch(panel, /(?:^|[;\s])font:\s*\d/,
+    '不允许再用 font 简写写死字号 —— 简写会覆盖 font-size/line-height 的宿主绑定')
+  assert.match(panel, /background:var\(--d-grad\),var\(--dsw-alias-bg-base,var\(--d-bg\)\)/,
+    '面板底色必须接 --dsw-alias-bg-base(会话根节点 ConversationRoot 的底色),--d-bg 只作兜底')
+})
+
+test('宿主适配:仪表盘页与面板走同一个宿主字体钩子', () => {
+  const body = ruleBody(read('web/index.html'), 'body')
+  assert.match(body, /font-family:var\(--dsw-font-family,/,
+    '仪表盘页字体族必须与面板同源,否则"同一个产品"的两处字体不一致')
+  assert.doesNotMatch(body, /(?:^|[;\s])font:\s*\d/,
+    '仪表盘页同样不允许 font 简写写死字体栈')
 })

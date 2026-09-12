@@ -1,6 +1,6 @@
 {
   "name": "@fufuf-c/dsh-token",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "DSH 本地 Token 使用统计仪表盘:四段 Token 构成、缓存省钱、会话下钻、全局筛选、预算与导出。全本地,零上传。",
   "type": "module",
   "main": "lib/index.js",
@@ -14,6 +14,7 @@
     "web",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

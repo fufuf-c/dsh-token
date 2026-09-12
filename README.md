@@ -51,14 +51,17 @@ lib/design-tokens.mjs 设计 token **单一来源**:两处界面的调色板/语
                       LOCAL 里显式登记"有意不一致"的项
 lib/index.js         Host 插件外壳:扫描(sessionPersistence)、/dsh-token 路由、
                       /token-stats 命令、5 分钟增量扫描(无变化不落盘)、
-                      页面 mtime 缓存 + gzip、POST 同源校验 + 1MB body 上限、
+                      页面缓存(按 path+mtime+外观偏好失效)+ gzip、发送时注入外观偏好、
+                     POST 同源校验 + 1MB body 上限、
                       store 形态体检与损坏留证、启动自检
-test/                node:test 断言(140 项):数据层、价格/时段、扫描与隔离、客户端注册、
+test/                node:test 断言(143 项):数据层、价格/时段、扫描与隔离、客户端注册、
                       页面渲染、宿主语义(时区口径/未定价/惰性重建/store 体检)、
-                      设计 token 一致性与引用闭合
+                      设计 token 一致性与引用闭合、宿主适配不回退
+                      (面板必须"接"宿主字体族/正文字号/底色,不允许抄成固定值)
 scripts/build.mjs    发布前完整性校验(文件、dsh 字段、各模块可解析、内联脚本语法)
 scripts/build-tokens.mjs 设计 token 注入器(`--check` 用于 CI/测试,漂移即失败)
-scripts/e2e-smoke.mjs 真实 http 栈端到端冒烟(零依赖,临时 DSH_HOME)
+scripts/e2e-smoke.mjs 真实 http 栈端到端冒烟(零依赖,临时 DSH_HOME;含外观偏好注入与
+                      「偏好进页面缓存键」:只改设置、不动页面文件,注入值也必须立刻换新)
 scripts/verify-tarball.mjs 打包产物验收:把 tarball 解到全新目录当"新装"启动一遍
                       (这些 scripts/ 与 test/ **不打进 npm 包**,只在仓库里) 
 ```
@@ -76,14 +79,28 @@ scripts/verify-tarball.mjs 打包产物验收:把 tarball 解到全新目录当"
 | 对话区域上方的页签 | `conversation.view` | **本会话用量** | **只服务当前对话**的原生面板(见下)。**不嵌 iframe**,走 `/api/session?id=…&brief=1` 只取汇总 |
 | 设置页 | `settings.section` | **Token 统计** | 数据源路径、缓存文件、会话/请求数、最近扫描统计 |
 
-**视觉规则:外壳跟随宿主,整屏视图跟随产品。**
+**视觉规则:外壳跟随宿主,整屏视图跟随产品 —— 但凡是宿主已经表达过的偏好,一律"接"而不是"抄"。**
 
 * 侧边栏那一行、设置页那一段 —— 它们是 DSH 外壳的一部分,用 DSH 的设计变量
   (`--dsw-alias-*`)画,和旁边的侧边栏、设置项浑然一体,不抢戏。
 * 对话区域里的「本会话用量」是**一整屏视图** —— 它跟随产品:复用 `/dsh-token` 仪表盘那一套
   iOS 设计语言(液态玻璃卡片、大数字 hero、彩色图标小卡、分类条形列表),调色板与语义色
-  跟仪表盘**逐一对齐**(缓存命中=绿、未命中=红、输出=蓝、缓存写入=灰,高峰=橙、空闲=蓝),
-  字体栈与 DSH 外壳**完全一致**。这样一眼就能认出"这是同一个插件",而不是"像 DSH 又不像 DSH"。
+  跟仪表盘**逐一对齐**(缓存命中=绿、未命中=红、输出=蓝、缓存写入=灰,高峰=橙、空闲=蓝)。
+* 但"跟随产品"只到**识别度**为止,不越过宿主已经表达过的偏好。以下四件事是**绑定**关系,
+  不是抄写关系 —— 抄一份固定值会在用户改设置或宿主换主题时静默失效:
+
+  | 维度 | 面板接的宿主变量 | 效果 |
+  | --- | --- | --- |
+  | 字体族 | `--dsw-font-family`(DSH 留给主题覆写的钩子) | 宿主的主题换了字体,面板与仪表盘一起跟着换 |
+  | 正文字号 | `--dsh-content-font-size`(「外观」里的内容字号,12–17px) | 面板与相邻页签同一个字号;行高走 `--dsh-content-font-delta` 同步变化 |
+  | 底色 | `--dsw-alias-bg-base`(会话根节点 ConversationRoot 的底色) | 面板与相邻页签无缝,切页签不会看到一大块异色 |
+  | 深浅色 | `body[data-ds-dark-theme]` | 跟宿主外壳同一个开关 |
+
+  面板自有的调色板(`--d-*`)退居**兜底**:宿主 token 缺失时(如单独打开 `web/index.html`)仍有产品底色。
+* `/dsh-token` 是独立文档,看不到宿主 DOM 上的 `data-ds-dark-theme`,所以由宿主在发送页面时
+  注入 `window.__DSH_TOKEN_THEME__`(读的是同一个 `ui-theme` 设置段)。页面的「自动」因此跟随
+  **DSH 外观**,而不是只跟随操作系统 —— 用户把 DSH 钉成深色、系统却是浅色时,两者不会反着来。
+  注入缺失(例如直接以文件打开本页)时退回"只跟随系统"。注入结果进页面缓存键,改设置立即生效。
 
 面板内容:
 
@@ -135,9 +152,9 @@ scripts/verify-tarball.mjs 打包产物验收:把 tarball 解到全新目录当"
 # npm(包名 @fufuf-c/dsh-token):
 dsh plugin --profile web add @fufuf-c/dsh-token
 # 或 git:
-dsh plugin --profile web add "git+https://github.com/fufuf-c/dsh-token.git#v0.7.0"
+dsh plugin --profile web add "git+https://github.com/fufuf-c/dsh-token.git#v0.7.1"
 # 或 Release 预构建 tarball(包内自带 lib/ 与 web/,装完即可用):
-dsh plugin --profile web add "https://github.com/fufuf-c/dsh-token/releases/download/v0.7.0/fufuf-c-dsh-token-0.7.0.tgz"
+dsh plugin --profile web add "https://github.com/fufuf-c/dsh-token/releases/download/v0.7.1/fufuf-c-dsh-token-0.7.1.tgz"
 # 装完安装依赖并重启
 cd ~/.dsh/profiles/web && pnpm install
 dsh web
