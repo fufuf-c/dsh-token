@@ -146,7 +146,7 @@ scripts/verify-tarball.mjs 打包产物验收:把 tarball 解到全新目录当"
 
 ## 安装
 
-三种方式任选(npm 为 scoped 包,`npm publish` 后可用):
+三种方式任选(三条路径均已实际可用):
 
 ```bash
 # npm(包名 @fufuf-c/dsh-token):
@@ -163,7 +163,7 @@ dsh web
 > 本包**没有构建步骤**:`lib/*.js`、`lib/core.mjs`、`web/index.html` 就是写死直接发布的
 > 源文件,浏览器端 `lib/client.js` 也由宿主直接提供,不经过打包器。tarball 与 git 安装
 > 拿到的是同一份字节。发布前的把关靠 `npm run verify`(完整性/语法校验)与
-> `npm test`(133 项断言),两者都挂在 `prepack` 上,所以 `npm pack` 不会漏跑。
+> `npm test`(143 项断言),两者都挂在 `prepack` 上,所以 `npm pack` 不会漏跑。
 
 安装后打开 `http://127.0.0.1:3080`,开箱即用:
 
@@ -323,7 +323,7 @@ dsh web
 ## 开发与验证
 
 ```bash
-npm test                # 141 项断言 + 设计 token 漂移检查
+npm test                # 143 项断言 + 设计 token 漂移检查
 npm run verify          # 发布前完整性校验(文件 / dsh 字段 / 模块可解析 / 内联脚本语法)
 npm run e2e             # 真实 http 栈端到端冒烟(临时 DSH_HOME,零依赖)
 npm run tokens          # 改完 lib/design-tokens.mjs 后重新注入两处界面
