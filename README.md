@@ -328,7 +328,12 @@ npm run verify          # 发布前完整性校验(文件 / dsh 字段 / 模块�
 npm run e2e             # 真实 http 栈端到端冒烟(临时 DSH_HOME,零依赖)
 npm run tokens          # 改完 lib/design-tokens.mjs 后重新注入两处界面
 npm pack && npm run verify:tarball   # 打包后把 tarball 解到全新目录当"新装"再验一遍
+node scripts/screenshot-harness.mjs  # 起合成数据实例(全虚构会话),重拍商店截图用
 ```
+
+`assets/` 里的商店截图由 `scripts/screenshot-harness.mjs` 起一个**全虚构**会话数据的
+临时实例拍摄(`screenshots.json` 按展示顺序列出)。截图永远不取自真实使用记录 ——
+重拍不会带出任何真实会话标题或用量的风险。
 
 `npm test` 与 `npm run verify` 都挂在 `prepack` 上,因此 `npm pack` / `npm publish`
 不会漏跑。CI 除 Node 20/22 双版本外,还另有一条**跨时区**任务
