@@ -28,6 +28,17 @@ DSH 本地 **Token 用量统计插件**——以 Token 为第一视角:不只回
 - **保留期可配**:`retention.days` 修剪超龄原始记录,防止内存与 store.json 无界增长(默认 0 = 永久保留);
 - **多模型叠加趋势图** + 图例逐模型独立开关 + 日/周/月粒度 + 24 桶小时直方图(峰值高亮) + 12 个月活跃热力图(日/周/累计)。
 
+## 界面
+
+六个视图,截图取自一份**全虚构**的示例库(18 个会话 / 474 次请求,由
+`scripts/screenshot-harness.mjs` 用固定种子生成),不含任何真实使用记录。点图看原图。
+
+|  |  |
+| :--: | :--: |
+| [![今天](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/01-today.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/01-today.png)<br>今天 · 四段构成与小时分布 | [![活动](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/02-activity.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/02-activity.png)<br>活动 · 趋势 / 逐模型 / 粒度切换 |
+| [![会话](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/03-sessions.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/03-sessions.png)<br>会话 · 排序 / 搜索 / 激增标记 | [![会话详情](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/04-session-detail.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/04-session-detail.png)<br>会话详情 · 指标 / 构成 / 增长曲线 |
+| [![逐请求时间线](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/05-session-growth.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/05-session-growth.png)<br>逐请求时间线 · 明细表 | [![设置](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/06-settings.png)](https://raw.githubusercontent.com/fufuf-c/dsh-token/main/assets/06-settings.png)<br>设置 · 预算 / 单价 / 高峰时段 |
+
 ## 架构
 
 ```
