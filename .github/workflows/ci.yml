@@ -1,0 +1,46 @@
+# dsh-token CI:完整性校验 + 全量断言 + Host 壳 e2e 冒烟 + 跨时区回归。
+#
+# 为什么单独有一条"跨时区"任务:本插件有**两条并存的时区口径**(日/月桶按宿主本地,
+# 小时桶与高峰取档按北京时间 UTC+8),而作者机器是 UTC+8 —— 只在本机跑测试的话,
+# "把本地时区当北京时间用"这类错误永远不会暴露(历史上真出过一次:小时图与高峰
+# 高亮在非 UTC+8 宿主上错开 8 小时)。所以这里显式用两个极端偏移再跑一遍。
+#
+# 包零依赖,无需 install。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - run: node scripts/build.mjs
+      - run: node scripts/e2e-smoke.mjs
+
+  timezone:
+    # 宿主时区无关性:UTC-11 与 UTC+14 是地球上最远的两个实用时区偏移
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: ['America/New_York', 'UTC', 'Asia/Shanghai', 'Pacific/Kiritimati']
+    env:
+      TZ: ${{ matrix.tz }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test

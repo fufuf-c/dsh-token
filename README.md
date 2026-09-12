@@ -8,11 +8,20 @@ DSH 本地 **Token 用量统计插件**——以 Token 为第一视角:不只回
 
 - **四段 Token 构成**:未命中 / 缓存命中 / 缓存写入 / 输出(不是简单的总量);
 - **缓存省钱估算**:命中量 × 未命中与命中的价差(核心差异化);
+- **成本诚实度**:未定价模型(无内置价且无自定义价)的成本一律计 0,但**绝不冒充完整成本** ——
+  `kpi.totals` 显式给出 `unpricedTokens` / `unpricedModelCount`,KPI 卡片与导出里都标注了
+  这部分"未计入";单价表只列当前配置的模型,其余收进"显示全部";
 - **全局筛选贯穿所有面板**:时间(今天/3天/7天/30天/自定义)+ 模型多选 + 会话 + 工作目录,URL 可分享;
 - **会话下钻**:四联统计、逐模型构成、逐请求明细、**上下文增长曲线**、**🔥 异常激增标记**、`?session=` 深链;
 - **成本与预算**:模型单价表(¥/M,**内置 DeepSeek 官方价目、高峰/空闲分档计价,时段规则可自行修改**、按模型覆盖 + 一键重置)、月度预算环形进度 + 外推月底预估 + 80%/100% 阈值变色、按模型/按会话成本归因;
 - **聚合快路径查询**:查询直接读 day/month 聚合索引(复杂度 O(天数) 而非 O(请求数),10 万条请求库 kpi 25ms→1ms);带 `session`/`wd` 筛选自动回退逐记录路径,两条路径输出等价由单测锁定;
 - **增量扫描,空闲零写放大**:未变化会话按 revision 跳过(变更文件才整段重折);常规重启只做增量;扫描周期无变化时跳过整库重建与落盘;扫描产物落盘合并(可重建缓存,最短 10 分钟写一次,配置变更立即落盘,退出兜底 flush);store.json 原子写(临时文件 + 改名);
+- **配置变更不触发全量重建**:单价/时段改动只置脏标记,重建推迟到**下一次读取**执行一次
+  (聚合入口 flush,或读某条记录成本时按需 flush)。设置页是点选式交互,连点 24 个小时格
+  也不会引发 24 次全量重建,而"改完单价立刻读到的就是新价"这一行为不变;
+- **store 损坏不静默清零**:读取时先做形态体检(字段缺失/类型错乱/NaN 一律不合格),
+  不合格就把原文件改名成 `store.json.corrupt-<时间戳>` 留证,再从会话日志重建,
+  绝不让下一次落盘把用户历史覆盖成"干净的空库";
 - **跨 DSH 版本自适应**:`sessionPersistence` 两代 API(旧的 `listSnapshots`/`readFrom` 与 0.1.5-rc.2 起的 `list`/`open`+句柄 `read`)按**能力探测**适配,插件不绑定宿主版本号;
 - **失败会话隔离**:被宿主确定性拒绝的老格式/损坏日志(如 `SessionFormatUnsupportedError`)在冷却窗口内跳过重试,不会每 5 分钟被整段重解码一遍;revision 变化、冷却期到期或 `force` 全量扫描都会自动重试,瞬时错误(IO 抖动、写租约冲突)始终留在重试路径上;
 - **配置面只列当前配置的模型**:模型清单本身来自历史用量、只增不减 —— 在 DSH 里删掉模型配置后历史账单仍在,列表不会缩;而"最近 N 天用过"也区分不出已删配置(删除往往紧随其近期使用之后)。所以**单价表**改由 DSH settings 驱动,只列「当前仍配置在 DSH 里」∪「已自定义单价」的模型,其余收进「显示全部」开关。历史用量 / 导出 / 会话下钻 / 仪表盘「按模型」一概不受影响(否则报表会和总额对不上);
@@ -24,17 +33,34 @@ DSH 本地 **Token 用量统计插件**——以 Token 为第一视角:不只回
 ```
 web/index.html       仪表盘单页 · Apple 风格(默认页;四 Tab:iOS 大标题 / 玻璃材质 /
                      活动圆环 hero / 屏幕使用时间式图表;纯原生 JS + Canvas,零构建)
-lib/client.js        浏览器 bundle:三个入口 —— 侧边栏「Token 统计」= 全量仪表盘(新开单页),
+lib/client.js        宿主直供的浏览器模块(`exports["./client"]`,手写、不经打包器):
+                      三个入口 —— 侧边栏「Token 统计」= 全量仪表盘(新开单页),
                       会话内「本会话用量」= 原生 React 单会话面板(不是 iframe),
                       设置页「Token 统计」= 插件信息面板。
-                      零第三方依赖(只 require 平台种子模块 react)
-lib/core.mjs         数据层核心(纯函数):折叠、聚合、筛选、导出、价格、异常检测、
+                      只 require 平台种子模块 react(宿主模块表提供,非 npm 依赖)
+lib/core.mjs         数据层核心(**纯数据**:store 进、结果出,不碰文件也不认识 Cordis 服务):
+                      折叠、聚合、筛选、导出、价格、异常检测、
                       会话标题提取(session/title → 首条用户消息回退)、
-                      sessionPersistence 新旧两代 API 适配层、
-                      确定性失败会话隔离、day/month 聚合快路径(O(天数) 查询)+ retention 修剪
+                      day/month 聚合快路径(O(天数) 查询)+ 惰性重建、store 形态体检
+lib/session-source.mjs 会话日志读取与扫描层(唯一需要 sessionPersistence 服务的一层):
+                      sessionPersistence 新旧两代 API 适配、增量水位线、
+                      确定性失败会话隔离 + retention 修剪
+                      (依赖方向:index → session-source → core;core 不认识前两者)
+lib/design-tokens.mjs 设计 token **单一来源**:两处界面的调色板/语义色/文本色/阴影
+                      由 scripts/build-tokens.mjs 注入 web/index.html 与 lib/client.js,
+                      LOCAL 里显式登记"有意不一致"的项
 lib/index.js         Host 插件外壳:扫描(sessionPersistence)、/dsh-token 路由、
                       /token-stats 命令、5 分钟增量扫描(无变化不落盘)、
-                      页面 mtime 缓存 + gzip、POST 同源校验 + 1MB body 上限、启动自检
+                      页面 mtime 缓存 + gzip、POST 同源校验 + 1MB body 上限、
+                      store 形态体检与损坏留证、启动自检
+test/                node:test 断言(140 项):数据层、价格/时段、扫描与隔离、客户端注册、
+                      页面渲染、宿主语义(时区口径/未定价/惰性重建/store 体检)、
+                      设计 token 一致性与引用闭合
+scripts/build.mjs    发布前完整性校验(文件、dsh 字段、各模块可解析、内联脚本语法)
+scripts/build-tokens.mjs 设计 token 注入器(`--check` 用于 CI/测试,漂移即失败)
+scripts/e2e-smoke.mjs 真实 http 栈端到端冒烟(零依赖,临时 DSH_HOME)
+scripts/verify-tarball.mjs 打包产物验收:把 tarball 解到全新目录当"新装"启动一遍
+                      (这些 scripts/ 与 test/ **不打进 npm 包**,只在仓库里) 
 ```
 
 数据源 = `$DSH_HOME/sessions`(默认 `~/.dsh/sessions`),经 DSH 官方 `sessionPersistence` 服务解码(`session.jsonl.zstd` 为多帧 Zstd + chunk 打包)。聚合与配置持久化于 `$DSH_HOME/dsh-token/store.json`。
@@ -87,11 +113,19 @@ lib/index.js         Host 插件外壳:扫描(sessionPersistence)、/dsh-token �
 | 路径推导 | `locate(meta)` | `locate(meta)`(仍存在,仅作兜底) |
 
 同时,**TokenUsage 口径**在 0.1.5-rc.2 明确为互斥口径:`inputTokens` 只计未命中输入,
-`totalTokens = input + read + write + out`。插件据 `totalTokens` 判定口径并自动回退兼容
-极老日志,`miss` 因此不再被"相减启发式"少算。
+`totalTokens = input + read + write + out`。插件据此按**等式判据**(`totalTokens === input + out`
+且带缓存)识别"折叠口径"的极老日志并回退相减,`miss` 因此不再被"相减启发式"少算。
 
-> store 结构版本随口径修正升到 **v4**;旧 store 首次加载会自动触发**一次**全量重扫,
-> 让修正后的口径覆盖全部历史数据,之后回到秒级增量。
+> store 结构版本随口径修正升到 **v4**;v4 → v5 是单价改为官方分档 + 高峰/空闲双价;
+> v5 → v6 是小时桶从"宿主本地时区"改为"北京时间"(与高峰取档同口径)。
+> 旧 store 首次加载会自动触发**一次**全量重扫,之后回到秒级增量。
+
+### 关于 `dsh.engines` / `dsh.compatibility`
+
+这两个字段**不是门禁**:DSH 宿主不读取它们(`dsh plugin add` 只检查 `dsh.bundle`),
+`DshManifest` 类型里也没有 `compatibility`。它们的作用是给插件市场/人工核对留一份
+"测过哪些宿主版本"的记录,`dsh.engines.dsh` 是**下限**而非精确集合。改宿主版本时
+请一并更新这里,别让它烂成过期文档。
 
 ## 安装
 
@@ -101,13 +135,18 @@ lib/index.js         Host 插件外壳:扫描(sessionPersistence)、/dsh-token �
 # npm(包名 @fufuf-c/dsh-token):
 dsh plugin --profile web add @fufuf-c/dsh-token
 # 或 git:
-dsh plugin --profile web add "git+https://github.com/fufuf-c/dsh-token.git#v0.6.0"
-# 或 Release 预构建 tarball(更快,无需本地构建):
-dsh plugin --profile web add "https://github.com/fufuf-c/dsh-token/releases/download/v0.6.0/fufuf-c-dsh-token-0.6.0.tgz"
+dsh plugin --profile web add "git+https://github.com/fufuf-c/dsh-token.git#v0.7.0"
+# 或 Release 预构建 tarball(包内自带 lib/ 与 web/,装完即可用):
+dsh plugin --profile web add "https://github.com/fufuf-c/dsh-token/releases/download/v0.7.0/fufuf-c-dsh-token-0.7.0.tgz"
 # 装完安装依赖并重启
 cd ~/.dsh/profiles/web && pnpm install
 dsh web
 ```
+
+> 本包**没有构建步骤**:`lib/*.js`、`lib/core.mjs`、`web/index.html` 就是写死直接发布的
+> 源文件,浏览器端 `lib/client.js` 也由宿主直接提供,不经过打包器。tarball 与 git 安装
+> 拿到的是同一份字节。发布前的把关靠 `npm run verify`(完整性/语法校验)与
+> `npm test`(133 项断言),两者都挂在 `prepack` 上,所以 `npm pack` 不会漏跑。
 
 安装后打开 `http://127.0.0.1:3080`,开箱即用:
 
@@ -140,21 +179,29 @@ dsh web
 | `/dsh-token/api/export.csv` | GET | 日×模型明细(当前筛选) |
 | `/dsh-token/api/export.json` | GET | 逐请求原始明细(当前筛选) |
 
-**POST 安全**:带 `Origin` 头的请求必须与 `Host` 头完全一致,且 `Host` 仅接受回环地址(`127.0.0.1`/`localhost`/`::1`)与 IP 字面量 —— IP 直连无法被 DNS 重绑定,域名 `Host` 的 POST 一律拒绝,同时防住 CSRF 与 DNS rebinding;无 `Origin` 的 curl 调用放行(通过域名反代访问时,设置类 POST 需走 curl 或本机地址)。请求体上限 1MB(超限排空剩余 body,keep-alive 不串流);`webPagePath` 仅接受 `.html`/`.htm`。页面响应带 `Content-Security-Policy`(仅内联脚本/样式 + 同源连接)与 `X-Content-Type-Options: nosniff`;CSV 导出对 `=/+/-/@` 开头的单元格做公式注入防护。**筛选参数**(贯穿所有数据端点):`range=today|3d|7d|30d|month|all|custom`(custom 配 `from`/`to` 日键 `YYYY-MM-DD`)、`models=`(逗号分隔 `provider:model` 键)、`session=`(会话 ID 前缀)、`wd=`(工作目录前缀)。
+**POST 安全**:带 `Origin` 头的请求必须与 `Host` 头完全一致,且 `Host` 必须落在"本机可达地址"白名单内 —— `localhost`/`*.localhost`、IPv4 回环(`127.0.0.0/8`)、IPv6 回环(`::1`、`::ffff:127.0.0.0/8`)、RFC1918 私网、链路本地、CGNAT、IPv6 唯一本地/链路本地放行;**域名与公网 IP 字面量一律拒绝**。域名拒绝是因为 DNS rebinding 只能借域名生效(rebind 后 `Origin.host` 与 `Host` 会同时是攻击者域名,同源等式恒真);公网 IP 字面量拒绝是因为 bind `0.0.0.0` 时任何人都能以裸 IP 访问,而浏览器发起的跨站请求的 `Origin` 必然是域名 —— 拒掉不伤任何正常用法。经 LAN 的私网 IP 访问(反代/多机)仍可写入配置,`curl` 无 `Origin` 调用照旧放行。请求体上限 1MB(超限排空剩余 body,keep-alive 不串流);`webPagePath` 仅接受 `.html`/`.htm`。页面响应带 `Content-Security-Policy`(仅内联脚本/样式 + 同源连接)与 `X-Content-Type-Options: nosniff`;CSV 导出对 `=/+/-/@` 开头的单元格做公式注入防护。**筛选参数**(贯穿所有数据端点):`range=today|3d|7d|30d|month|all|custom`(custom 配 `from`/`to` 日键 `YYYY-MM-DD`)、`models=`(逗号分隔 `provider:model` 键)、`session=`(会话 ID 前缀)、`wd=`(工作目录前缀)。
 
 **kpi 响应**:
 ```jsonc
 {
   "range": { "label", "fromDay", "toDay" },
-  "totals": { "miss", "read", "write", "out", "total", "requests", "cost", "saved" },
+  "totals": { "miss", "read", "write", "out", "total", "requests", "cost", "saved",
+              "unpricedTokens": 650,       // 无内置价且无自定义价的 tokens(cost 里记 0)
+              "unpricedModelCount": 1 },   // 涉及几个模型
   "hitRate": 0.986,            // read / (miss+read+write)
   "activeSessions": 110,
-  "peakDay": { "day", "tokens" },
+  "peakDay": { "day", "tokens" },  // 无任何用量时为 null(不是 tokens 为 0 的伪日期)
   "delta": { "tokens", "cost" },   // 今日环比昨日 / 本月环比上月
   "streakDays": 9,
   "models": [{ "key", "provider", "model", "totals" }]  // 按量降序
 }
 ```
+
+> **时区口径**(两条并存,别混):日/月桶按**宿主本地时区**("今天"= 用户所在时区的今天);
+> 小时桶(24 桶)与高峰/空闲取档按**北京时间** UTC+8,因为官方按时段计费、同一份价目必须
+> 在任何宿主时区下落在同一个桶里。`/dsh-token/api/hours` 的 24 桶与
+> `/dsh-token/api/session` 的 `hours`/`hoursPeak` 现在是**同一口径**;旧版本里 `/hours`
+> 用的是本地 `getHours()`,非 UTC+8 宿主会与高峰高亮错开 8 小时(storage v5 → v6 已修正)。
 
 **session 响应**:`{ id, meta{id,createdAt,cwd,parentSession,origin,delegationDepth,agentPreset,workspace}, totals, models[], requests[], requestCount, anomalies, flagged, flags[] }`;`requests[i]` = `{seq,t,m,miss,read,write,out,r(推理),i(中断),cum(累计输入),cost,saved,priced}`;`flags[i]` 0=正常 1=🔥激增 2=中断。
 
@@ -218,17 +265,21 @@ dsh web
 `prices` 在读取侧已归一化为两档,UI 无需分支;`peakHours` / `peakDays` 为生效值的紧凑文本,
 `defaultsPeakHours` / `defaultsPeakDays` 供页面"恢复默认"按钮对照。
 
-> 改动价目表属于**语义变更**:必须同时 +1 `STORE_VERSION`(当前 v5),否则水位线会按 revision
+> 改动价目表属于**语义变更**:必须同时 +1 `STORE_VERSION`(当前 **v6**),否则水位线会按 revision
 > 跳过未变化会话,存量成本永远沿用旧价。测试 `test/price.test.mjs` 把官方数字与默认时段
-> 都写死为断言(改价目/改时段会立刻失败),并单独断言"这两者都能被配置覆盖"。
+> 都写死为断言(改价目/改时段会立刻失败),并单独断言"这两者都能被配置覆盖";
+> 时区口径与惰性重建由 `test/host-semantics.test.mjs` 锁定。
 
 ## 已知限制
 
-- 规模上限参考:10 万请求时 store.json ≈ 19MB,请求记录全量驻留内存;每个"脏"扫描周期(5 分钟 tick 且有会话变更时)执行一次全量重建 + 落盘,实测约 165ms(Node 24)。默认 `retention.days=0` 永久保留,长期大库建议开启保留期(如 `{"retention":{"days":365}}`)控制体积;
-- 通过域名反代访问仪表盘时,设置类 POST(同源校验要求 Host 为本机/IP)会被拒绝 —— 这是防 DNS rebinding 的代价,可用 curl 或本机地址替代;
+- 规模上限参考:10 万请求时 store.json ≈ 19MB,请求记录全量驻留内存;每个"脏"扫描周期(5 分钟 tick 且有会话变更时)执行一次全量重建 + 落盘,实测约 165ms(Node 24)。默认 `retention.days=0` 永久保留,长期大库建议开启保留期(如 `{"retention":{"days":365}}`)控制体积。**代价**:`writeStore` 是"整个 store 一次 `JSON.stringify` + 原子改名",库越大单次落盘越贵(19MB 级每次数百毫秒),且损坏时只能整体改名重建 —— 拆成"聚合快照 + 逐请求分片"是后续可做的优化,当前版本没做;
+- 通过**域名**反代访问仪表盘时,设置类 POST 会被拒绝(防 DNS rebinding 的代价):Host 白名单只放行回环名、私网/链路本地/CGNAT/唯一本地 IP 与回环 IPv6,**域名与公网 IP 字面量一律拒绝**。私网 IP 直连(如 `http://192.168.1.5:3080`)与 `curl`(无 `Origin`)可用;
 - 仪表盘价格估算内置 **DeepSeek 官方价目**(¥/M),按官方页口径分档并区分时段 ——
   见下方「价格口径」。中继/自建模型按模型名套用同一价目作**估算**(仅供参考),非 DeepSeek 系
-  模型无内置价,需手动录入,未定价模型成本计 0 并标记 `priced: 0`(单价表显示"未定价 · 按 ¥0 计");
+  模型无内置价,需手动录入;未定价模型成本计 0,但这部分**不会被藏起来** ——
+  `kpi.totals.unpricedTokens` / `unpricedModelCount` 显式给出,单价表显示"未定价 · 按 ¥0 计",
+  会话面板与 KPI 卡片都会标注"含未定价模型,费用偏低"。**因此"估算成本"要读成
+  "已定价部分的成本 + 未定价 token 数",不是完整账单;**
 - 默认永久保留全部原始请求记录(会话下钻/导出依赖);设置 `retention.days` 可按天修剪,
   修剪在扫描期执行,超龄会话整段清理;
 - **被宿主拒绝的老会话无法统计**:部分 v0 老日志(插件注入过非标准事件成员,或子代理
@@ -236,6 +287,13 @@ dsh web
   `meta.quarantinedCount`(设置页/`/dsh-token/api/meta` 可见),可用 `POST /dsh-token/api/scan`
   或重启触发 `force` 重试。它们**上一次成功扫描的记录会保留**在 store 里(不会静默清零),
   只是不再更新 —— 本机实测为 18 个会话 / 549 条记录;
+- **store.json 损坏时以"留证 + 重建"处理,不尝试原地修复**:形态体检只做结构判定
+  (字段/类型/NaN),不合格就改名成 `store.json.corrupt-<时间戳>` 再从会话日志重建。
+  这样不会丢数据、也不会丢证据,但**配置**(自定义单价、预算、保留期、自定义页面路径)
+  会随之回默认 —— 因为它们只存在 store 里,日志里没有。想保住配置,请把
+  `$DSH_HOME/dsh-token/store.json` 一起备份;
+- **小时桶/高峰判定固定北京时间**(UTC+8),不跟随宿主时区,也不可配置;日/月桶按宿主
+  本地时区。两者口径不同是有意的:前者对齐官方计费,后者对齐用户对"今天"的直觉;
 - 单价表按 DSH settings 里的模型目录过滤。命名空间形态已知两种(`llm-pi-ai` 的
   `providers.<路由>.models[]`,以及适配器自带命名空间的顶层 `models[]`,provider 名靠一张
   小映射表补全)。**任何解析不出来时一律关闭过滤显示全部**,并在启动日志里打印所见的命名
@@ -244,6 +302,26 @@ dsh web
   沙箱无法构造 schemastery schema);单价表只**读** DSH settings,从不写它,且只取
   `provider:model` 标识,settings 原文(含凭据相关字段)绝不进入 API 载荷;
 - 会话标题取 DSH 的自动生成标题(`session/title` 事件),缺省回退首条用户消息。
+
+## 开发与验证
+
+```bash
+npm test                # 141 项断言 + 设计 token 漂移检查
+npm run verify          # 发布前完整性校验(文件 / dsh 字段 / 模块可解析 / 内联脚本语法)
+npm run e2e             # 真实 http 栈端到端冒烟(临时 DSH_HOME,零依赖)
+npm run tokens          # 改完 lib/design-tokens.mjs 后重新注入两处界面
+npm pack && npm run verify:tarball   # 打包后把 tarball 解到全新目录当"新装"再验一遍
+```
+
+`npm test` 与 `npm run verify` 都挂在 `prepack` 上,因此 `npm pack` / `npm publish`
+不会漏跑。CI 除 Node 20/22 双版本外,还另有一条**跨时区**任务
+(`America/New_York` / `UTC` / `Asia/Shanghai` / `Pacific/Kiritimati`)——
+本插件有两条并存的时区口径(日/月桶按宿主本地,小时桶与高峰取档按北京时间),
+只在本机(UTC+8)跑测不出任何东西:历史上真出过一次"小时图与高峰高亮在非 UTC+8
+宿主上错开 8 小时",而当时断言全绿。
+
+改配色请只改 `lib/design-tokens.mjs`(`web/index.html` 与 `lib/client.js` 里的
+token 块是生成物,`--check` 会挡住手改)。
 
 ## 许可
 
