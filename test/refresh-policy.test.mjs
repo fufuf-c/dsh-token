@@ -275,7 +275,7 @@ async function loadHost({ persistence } = {}) {
  * 更贴近要守的不变式(那个断言其实锁不住东西:空库走不进写盘路径,目录压根不会创建)。
  */
 function realStoreFingerprint() {
-  const f = join(REAL_HOME || join(os.homedir(), '.dsh'), 'dsh-token', 'store.json')
+  const f = join(REAL_HOME || join(homedir(), '.dsh'), 'dsh-token', 'store.json')
   if (!existsSync(f)) return null
   const st = statSync(f)
   return { size: st.size, mtimeMs: st.mtimeMs }
