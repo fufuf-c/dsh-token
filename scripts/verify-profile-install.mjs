@@ -97,7 +97,12 @@ const boot = await import(pathToFileURL(bootPath).href)
 const layer = boot.loadProfileDirectory('verify', profileDir, installAnchor)
 const mine = (layer.layers ?? []).find((l) => l.packageName === pkg.name)
 assert.ok(mine, `宿主 app-boot 未把 ${pkg.name} 解析为 bundle 层(层:${(layer.layers ?? []).map((l) => l.packageName).join(', ')})`)
-assert.ok(mine.patchPath.endsWith('cordis.patch.yml'), 'patch 层路径正确')
+// 层里 patch 的字段名在 0.1.7-alpha.1 从 `patchPath`(单个字符串)改成了
+// `patchPaths`(字符串数组)—— 一个 bundle 现在可以叠多层 patch。两种都认,
+// 否则这条验收会在新宿主上恒失败,而失败原因看着像"本包的 patch 丢了"。
+const patchPaths = mine.patchPaths ?? (mine.patchPath === undefined ? [] : [mine.patchPath])
+assert.ok(patchPaths.some((p) => String(p).endsWith('cordis.patch.yml')), `patch 层路径正确(实得:${JSON.stringify(patchPaths)})`)
+assert.ok((mine.patches ?? []).length > 0, 'patch 内容必须已被宿主解析出来')
 console.log(`✓ 宿主 app-boot 解析出 ${layer.layers.length} 个 bundle 层,本包在其中且 patch 就位`)
 
 rmSync(work, { recursive: true, force: true })

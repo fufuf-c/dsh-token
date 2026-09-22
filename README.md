@@ -69,8 +69,8 @@ lib/design-tokens.mjs 设计 token **单一来源**:两处界面的调色板/语
                       (**注入源文件**,再由 build-web 带进产物),LOCAL 里显式登记"有意不一致"的项
                       **仅构建期使用**:不在 package.json 的 files 里,运行时无任何 import
                       (由 V63b 守卫 —— 运行时 import 它会让用户侧 MODULE_NOT_FOUND)
-scripts/invariants.mjs **不变量登记表**:95 条防退化守卫的"锁什么 / 为什么 / 被哪个测试锁定"
-                      (V1–V66e),机器可读。test/invariants.test.mjs **双向强制**:
+scripts/invariants.mjs **不变量登记表**:112 条防退化守卫的"锁什么 / 为什么 / 被哪个测试锁定"
+                      (V1–V73e),机器可读。test/invariants.test.mjs **双向强制**:
                       登记了没测试 → 失败;有 V 编号测试没登记 → 失败;缺号必须在 GAPS 里解释
 scripts/web-parts.mjs 网页源文件的拼接清单(按序排列的文件名)
 scripts/build-web.mjs 把 web/src/** 拼成 web/index.html;--check 逐字节校验(漂移即失败)
@@ -196,10 +196,40 @@ scripts/bench-refactor.mjs / bench-one.mjs / gen-stress-store.mjs
 "测过哪些宿主版本"的记录,`dsh.engines.dsh` 是**下限**而非精确集合。改宿主版本时
 请一并更新这里,别让它烂成过期文档。
 
-当前声明为 `>=0.1.5-rc.1 || >=0.1.6-0`。**后半段不是冗余**:按 SemVer 规则,
-预发布版本不落在普通范围里 —— `0.1.6-alpha.1` **不满足** `>=0.1.5-rc.1`,
-只写前半段会把 0.1.6 起的预发布判成不兼容(本插件实际支持它们)。补一条
-`>=0.1.6-0` 才能把"0.1.6 及其预发布"纳入范围。这仍然只是**声明**,不构成门禁。
+当前声明为 `>=0.1.5-rc.1 || >=0.1.6-0 || >=0.1.7-0`。**后两段不是冗余**:按 SemVer
+规则,预发布版本不落在普通范围里 —— `0.1.6-alpha.1` **不满足** `>=0.1.5-rc.1`,
+`0.1.7-alpha.1` **既不满足** `>=0.1.5-rc.1` **也不满足** `>=0.1.6-0`。只写前面几条会把
+这两个预发布判成不兼容(本插件实际支持它们)。每加一条 `>=0.x-0` 才能把"0.x 及其预发布"
+纳入范围。这仍然只是**声明**,不构成门禁。
+
+### 0.1.7-alpha.1:宿主 revision 粒度回归(0.9.6 修复)
+
+宿主 `@deepseek-ai/dsh-session-persistence-jsonl` 在 **0.1.7-alpha.1** 改了 `list()`
+里 revision 的构造(对比 0.1.6-alpha.1 的同名函数):
+
+| 宿主版本 | 遗留会话(v3）的 revision |
+| --- | --- |
+| ≤ 0.1.6 | `<文件身份>` = `dev:ino:size:mtimeNs:ctimeNs` |
+| ≥ 0.1.7 | `<文件身份>:<整库语料哈希>`（**仅当**来源版本 < 当前格式） |
+
+后半段是 `historicalCorpusRevision()` —— **整库所有会话文件**路径 + 各自 stat 身份的
+sha256,表达的是"遗留会话的解码可能依赖兄弟文件"。但它的粒度是**整库**。
+
+插件原先把 revision 直接当水位线(`wm.rev !== String(s.revision)`),于是任何一个文件被
+新建 / 追加 / 触碰都会让**全部遗留会话**的水位线同时失效 → 每轮整库重读。实测(70 个会话,
+65 个是 v3)只改 1 个文件的 mtime、内容零改动:
+
+| 场景 | 耗时 | changed |
+| --- | --- | --- |
+| 无变化的一轮 | **88 ms** | 0 |
+| 只改 1 个文件的 mtime | **8 512 ms** | 65 |
+
+而页面「进入界面时先扫描」默认开启,打开面板要等整轮扫完才出数 —— 表现就是**时好时坏**。
+
+0.9.6 起水位线只认**文件身份**,遗留会话的兄弟依赖改用"该父会话的子会话子树"
+(`origin === 'subagent' && parentSession === id`,与宿主真正读的那批文件一致)精确表达:
+子会话增删改只让该父会话重读,其余遗留会话不受影响。已在 0.1.7 上跑过的库无需迁移,
+第一轮就是零重读。
 
 ## 安装
 
@@ -209,9 +239,9 @@ scripts/bench-refactor.mjs / bench-one.mjs / gen-stress-store.mjs
 # npm(包名 @fufuf-c/dsh-token):
 dsh plugin --profile web add @fufuf-c/dsh-token
 # 或 git:
-dsh plugin --profile web add "git+https://github.com/fufuf-c/dsh-token.git#v0.9.5"
+dsh plugin --profile web add "git+https://github.com/fufuf-c/dsh-token.git#v0.9.6"
 # 或 Release 预构建 tarball(包内自带 lib/ 与 web/,装完即可用):
-dsh plugin --profile web add "https://github.com/fufuf-c/dsh-token/releases/download/v0.9.5/fufuf-c-dsh-token-0.9.5.tgz"
+dsh plugin --profile web add "https://github.com/fufuf-c/dsh-token/releases/download/v0.9.6/fufuf-c-dsh-token-0.9.6.tgz"
 # 装完安装依赖并重启
 cd ~/.dsh/profiles/web && pnpm install
 dsh web

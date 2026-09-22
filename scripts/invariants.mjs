@@ -583,6 +583,32 @@ export const INVARIANTS = [
     title: '改动 requests 之后形状缓存必须作废(不得沿用改动前的结论)',
     why: '`aggregateShapeOk` 只以 days 的对象标识为缓存键,而"requests 变了、days 还是同一个对象"正是扫描的中间态。实测:空库 flushAggregates() 把形状缓存成 ok=true 后扫进 2 个会话,aggregatesReady 仍报 true,聚合再也不会被重建。所以任何改动 requests 的地方都必须 markStale。',
   },
+  // ── 宿主 revision 粒度(0.1.7-alpha.1 回归)────────────────────────────
+  {
+    id: 'V73', kind: 'behavior', file: 'test/v096-hostrev.test.mjs',
+    title: '遗留会话的整库语料哈希不得让任一会话变动触发全库重读',
+    why: '宿主 0.1.7-alpha.1 把 v3 遗留会话的 revision 改成"文件身份:整库语料哈希"。原实现直接比 wm.rev !== revision,于是任何一个文件被新建/追加/触碰都会让全部遗留会话的水位线同时失效,每轮整库重读。作者实测 70 会话(65 个 v3)只改 1 个文件的 mtime:88ms → 8512ms;而页面「进入界面时先扫描」默认开启,表现为打开面板白屏到扫完 —— 即"时好时坏"。水位线必须只认文件身份。',
+  },
+  {
+    id: 'V73b', kind: 'behavior', file: 'test/v096-hostrev.test.mjs',
+    title: '语料哈希变化本身(其他格式文件被碰)不得重读任何遗留会话',
+    why: '与 V73 同一事故的另一面:整库语料哈希会因**任何**文件的 stat 变化而变,包括当前格式(v4)会话与无关目录。若不隔离这一项,单靠"只比文件身份"仍可能被别处的哈希变化带偏 —— 这条锁定"哈希变了但文件身份没变 → 零重读"。',
+  },
+  {
+    id: 'V73c', kind: 'behavior', file: 'test/v096-hostrev.test.mjs',
+    title: '老库残留的六段 rev(含整库哈希)不得触发一次整库重读',
+    why: '已在 0.1.7 上跑过的库,水位线里存的正是六段形态。修复只归一化当前快照而不归一化**已存值**的话,升级后的第一轮会把全部遗留会话判为"变了"而整库重读一次 —— 正是本次要消除的卡顿。存值也必须过 ownRevisionToken。',
+  },
+  {
+    id: 'V73d', kind: 'behavior', file: 'test/v096-hostrev.test.mjs',
+    title: '遗留会话的兄弟依赖按父会话子树精确追踪(不扩大也不缩小)',
+    why: '整库哈希原本表达的是"遗留会话的解码可能依赖兄弟文件"(宿主 prepareStoredMigration 会读 origin=subagent && parentSession=id 的子会话)。直接丢掉这层依赖会让父会话在子会话变化后不再重折(数据静默少算)。改用"该父会话的子会话 id+文件身份"表达:子会话增删改只重读该父,不波及别的父。这条同时锁定不能收普通 parentSession 会话。',
+  },
+  {
+    id: 'V73e', kind: 'structure', file: 'test/v096-hostrev.test.mjs',
+    title: 'ownRevisionToken 只保留文件身份,relatedFingerprints 只认子代理子会话',
+    why: '上面三条的行为断言依赖这两个纯函数。它们的边界(五段原样返回、内存会话段数不足、null/undefined 不抛)必须单独锁住 —— 否则宿主换一种 revision 形态(或 pending 会话的 memory: 形态)时,归一化会静默切错分支。',
+  },
 ]
 export const GAPS = {
   V19: '并入 V18(同一主题的两条断言合为一条,归一口径的形状一致性已由 V18 全覆盖)',

@@ -1,6 +1,6 @@
 {
   "name": "@fufuf-c/dsh-token",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "DSH 本地 Token 使用统计仪表盘:四段 Token 构成、缓存省钱、会话下钻、全局筛选、预算与导出。全本地,零上传。",
   "type": "module",
   "main": "lib/index.js",
@@ -45,13 +45,14 @@
       ]
     },
     "engines": {
-      "dsh": ">=0.1.5-rc.1 || >=0.1.6-0"
+      "dsh": ">=0.1.5-rc.1 || >=0.1.6-0 || >=0.1.7-0"
     },
     "compatibility": {
       "dshReleases": {
         "0.1.2-rc.1": "compatible",
         "0.1.5-rc.2": "compatible",
-        "0.1.6-alpha.1": "compatible"
+        "0.1.6-alpha.1": "compatible",
+        "0.1.7-alpha.1": "compatible"
       }
     }
   },
