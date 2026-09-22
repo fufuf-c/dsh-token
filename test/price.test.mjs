@@ -13,7 +13,7 @@ import {
   defaultPrice, priceOf, priceAt, isPeakHour, computeCost, priceEntryOf,
   priceDefaults, configView, peakSchedule, emptyStore, rebuildAll, applyConfigPatch,
   parseHourRanges, fmtHourRanges, parseDayRanges, fmtDayRanges,
-  normalizeHourRanges, normalizeDayRanges, dayKeyOf,
+  normalizeHourRanges, normalizeDayRanges, dayKeyOf, flushAggregates,
 } from '../lib/core.mjs'
 
 /** 北京时间的某个瞬间 → epoch ms(北京时间 = UTC+8) */
@@ -115,6 +115,10 @@ test('时段规则存进 store.config 后 rebuildAll 按新规则重算', () => 
   rebuildAll(store)
   assert.equal(store.requests.s1[0].cost, 2, '默认规则下 10:00 是高峰 → ¥2')
   applyConfigPatch(store, { peakHours: '20-23' })
+  // 0.8.9:applyConfigPatch 只置脏标记(O(1)),重建发生在下一次读取。
+  // 逐记录成本字段是普通数据属性,所以要先 flushAggregates 才看得到新价 ——
+  // 生产路径(所有查询入口、落盘前)都会先 flush,这里显式调一次以表达该契约。
+  flushAggregates(store)
   assert.equal(store.requests.s1[0].cost, 1, '改规则后同一时刻改判空闲 → ¥1')
   assert.deepEqual(store.config.peakHours, [[20, 23]])
 })
@@ -170,10 +174,16 @@ test('deepseek-official 按模型名分档', () => {
   assert.equal(defaultPrice('deepseek-official', 'whatever-new').key, 'deepseek-flash', '认不出回退 Flash,不猜 pro')
 })
 
-test('中转模型按名字估算,无关模型无默认价', () => {
-  assert.equal(defaultPrice('ccai', 'deepseek-v4-pro').key, 'deepseek-pro')
-  assert.equal(defaultPrice('jyld', 'deepseek-v4-flash-0731').key, 'deepseek-flash')
-  assert.equal(defaultPrice('gjcs', 'DeepSeek-V4-Flash-0731-Event').key, 'deepseek-flash')
+test('转运/第三方模型一律无内置价(0.8.5 定价规则:只有官方价)', () => {
+  // 规则:只有 deepseek-official 享受内置价目;其余 provider 一律 null(= 成本计 ¥0,
+  // 由 unpricedTokens 显式报出)。**不再**按模型名套官方价估算 —— 中转的真实计费
+  // 与官方价无关,套出来的数字像账单但不是账单。要精确成本请录入自定义单价。
+  assert.equal(defaultPrice('ccai', 'deepseek-v4-pro'), null)
+  assert.equal(defaultPrice('jyld', 'deepseek-v4-flash-0731'), null)
+  assert.equal(defaultPrice('gjcs', 'DeepSeek-V4-Flash-0731-Event'), null)
+  // 本机主力路由 d1:即便名字与官方完全同名,也不套官方价
+  assert.equal(defaultPrice('d1', 'deepseek-v4.1-flash'), null)
+  assert.equal(defaultPrice('d1', 'deepseek-flash'), null)
   assert.equal(defaultPrice('gmi', 'MiniMaxAI/MiniMax-M3'), null)
   assert.equal(defaultPrice('s', 'kimi-k3'), null)
   assert.equal(defaultPrice('openrouter', 'stealth/ox-alpha'), null)
@@ -342,6 +352,7 @@ test('显式空时段 = 全按空闲价(而不是悄悄回退默认)', () => {
   applyConfigPatch(store, { peakHours: [] })
   assert.deepEqual(store.config.peakHours, [])
   assert.deepEqual(peakSchedule(store).hours, [])
+  flushAggregates(store) // 0.8.9:配置补丁只置脏,读成本前先 flush
   assert.equal(store.requests.s1[0].cost, 1, '清空后按空闲价 → ¥1')
 })
 
@@ -390,10 +401,13 @@ test('rebuildAll:未定价模型成本为 0 且标记 priced=0', () => {
   assert.equal(store.requests.s1[0].priced, 0)
 })
 
-test('改单价后立刻按新价重算', () => {
+test('改单价后按新价重算(补丁只置脏,读前 flush 一次)', () => {
   const store = storeWith([rec('deepseek-official:deepseek-flash', FRI(10), { miss: 1e6 })])
   rebuildAll(store)
   assert.equal(store.requests.s1[0].cost, 2)
   applyConfigPatch(store, { prices: { 'deepseek-official:deepseek-flash': { miss: 3, hit: 0, write: 0, output: 0 } } })
-  assert.equal(store.requests.s1[0].cost, 3, 'applyConfigPatch 内部已 rebuildAll')
+  // 0.8.9:补丁是 O(1)(只写脏标记),重建推迟到下一次读取 —— 见 flushAggregates。
+  assert.equal(store.requests.s1[0].cost, 2, '补丁本身不再触碰逐记录字段')
+  flushAggregates(store)
+  assert.equal(store.requests.s1[0].cost, 3, 'flush 之后按新价重算')
 })

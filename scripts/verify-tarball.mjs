@@ -12,7 +12,7 @@
 import http from 'node:http'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
@@ -36,7 +36,11 @@ const all = readdirSync(root, { recursive: true }).map((p) => String(p).replace(
 for (const bad of all.filter((p) => /^(test|scripts)\//.test(p) || p.endsWith('.tgz') || p.endsWith('.map'))) {
   assert.fail(`tarball 不应包含开发期文件:${bad}`)
 }
-console.log(`✓ 文件清单正确(${all.filter((p) => !p.endsWith('/')).length} 个文件,无开发期文件)`)
+/* 只数**文件**,不数目录。原先写 `!p.endsWith('/')`,但 Windows 上
+   readdirSync(recursive) 对目录**不带**尾斜杠,于是 `lib` 和 `web` 被算成文件 ——
+   日志里报 13 而 npm pack 报 11,一个纯显示错误也能让人怀疑安装是不是缺文件。 */
+const fileCount = all.filter((p) => existsSync(join(root, p)) && !statSync(join(root, p)).isDirectory()).length
+console.log(`✓ 文件清单正确(${fileCount} 个文件,无开发期文件)`)
 
 // 3. 真实跑一次:用解包后的路径加载插件
 const home = mkdtempSync(join(tmpdir(), 'dtk-tarball-home-'))
@@ -85,7 +89,24 @@ const page = await fetch(base + '/dsh-token')
 assert.equal(page.status, 200)
 assert.ok((await page.text()).includes('dsh-token'))
 const meta = await (await fetch(base + '/dsh-token/api/meta')).json()
-assert.equal(meta.storeVersion, 6, 'store 版本应为 v6')
+assert.equal(meta.storeVersion, 8, 'store 版本应为 v8(落盘格式契约)')
+// 0.9.0:落盘必须是**分片布局** —— store.json 只留元数据,记录在 shards/。
+// 这里直接看盘上的事实,而不是只信 API 自述。
+const metaFile = join(home, 'dsh-token', 'store.json')
+assert.ok(existsSync(metaFile), 'store.json 应存在')
+const onDisk = JSON.parse(readFileSync(metaFile, 'utf8'))
+assert.equal(onDisk.requests, undefined, 'store.json 不得含 requests(应为元数据/索引)')
+assert.ok(existsSync(join(home, 'dsh-token', 'shards')), 'shards/ 目录应存在')
+const shardFiles = readdirSync(join(home, 'dsh-token', 'shards')).filter((f) => f.endsWith('.json'))
+assert.equal(shardFiles.length, 1, `应有 1 个会话分片(实际 ${shardFiles.length})`)
+const shard = JSON.parse(readFileSync(join(home, 'dsh-token', 'shards', shardFiles[0]), 'utf8'))
+assert.equal(shard.id, 's1', '分片内应含原始会话 id')
+assert.ok(Array.isArray(shard.rows) && shard.rows[0].length === 9, '分片应是 9 列紧凑行数组')
+// v8:分片必须**自带模型表**(全局表会让局部重写错位,见 core.splitStore)
+assert.ok(Array.isArray(shard.models), '分片必须自带 models 表')
+assert.equal(onDisk.modelTable, undefined, 'store.json 不得再带全局 modelTable')
+// 重启一次:分片必须能被读回(证明"写出的东西自己能读")
+assert.ok(onDisk.sessions && onDisk.sessions.s1, '元数据里应保留会话(标题不丢)')
 server.close()
 rmSync(home, { recursive: true, force: true })
 rmSync(work, { recursive: true, force: true })

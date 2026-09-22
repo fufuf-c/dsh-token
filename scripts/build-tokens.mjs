@@ -50,7 +50,10 @@ function transform(file, regions) {
 
 const TARGETS = [
   {
-    file: 'web/index.html',
+    // **注入的是源文件,不是产物**。web/index.html 由 scripts/build-web.mjs 从
+    // web/src/** 拼接而成;若注入到产物,下一次拼接就会把注入覆盖掉 ——
+    // 顺序必须是 build-tokens → build-web(npm test / prepack 已按此编排)。
+    file: 'web/src/style.css',
     regions: [
       { file: 'html', theme: 'light', pad: '  ' },
       { file: 'html', theme: 'dark', pad: '  ' },

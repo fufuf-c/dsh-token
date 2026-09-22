@@ -9,7 +9,8 @@ import assert from 'node:assert/strict'
 import {
   emptyStore, foldSession, rebuildAll, applyConfigPatch, makeFilter, parseQuery,
   kpiQuery, seriesQuery, hoursQuery, heatmapQuery, sessionsQuery, sessionDetailQuery,
-  exportCsv, exportJson, dayKeyOf, aggregatesReady, extractSessionInfo,
+  exportCsv, exportJson, dayKeyOf, aggregatesReady, markScanning, extractSessionInfo,
+  isStoreShapeValid, configView,
 } from '../lib/core.mjs'
 
 /**
@@ -29,6 +30,32 @@ const DAY1 = dayKeyOf(T)
 const DAY2 = dayKeyOf(dayShift(T, 1))
 /** "现在"锚在 DAY2 晚间:连续天数才有确定的答案(不能随手 +27h,那会跨到 DAY3) */
 const NOW = dayShift(T, 1) + 6 * 3600 * 1000
+
+/**
+ * 数一数逐记录被真的读了几次(读 r.t 即计一次)。
+ *
+ * 为什么需要它:光比较"两条路径的输出相等"证明不了慢路径被走到 —— 两边都走快路径
+ * 时同样相等(那正是本文件旧版等价用例的毛病)。用 r.t 的读取次数才能分辨:
+ *   · 快路径只读聚合桶 → 0 次;
+ *   · 慢路径 eachWithin 对每条记录做 dayKeyOf(rec.t) → 每条 1 次。
+ * 探针装在查询**之前**,但 rebuildAll 也会读 r.t —— 因此调用方必须保证查询开头的
+ * flushAggregates 无事可做(已就绪且未标脏),或整段锁在 markScanning 里。
+ */
+function countRecordTReads(store, fn) {
+  const swapped = []
+  let reads = 0
+  for (const id of Object.keys(store.requests)) {
+    const list = store.requests[id]
+    for (let i = 0; i < list.length; i++) {
+      const orig = list[i]
+      const prox = new Proxy(orig, { get(t, k) { if (k === 't') reads++; return t[k] } })
+      swapped.push([list, i, orig])
+      list[i] = prox
+    }
+  }
+  try { fn() } finally { for (const [list, i, orig] of swapped) list[i] = orig }
+  return reads
+}
 
 /** 数值容差比较:快路径与慢路径的浮点累加顺序不同,允许 1e-9 相对误差 */
 function approx(a, b, eps = 1e-9, path = '$') {
@@ -142,6 +169,31 @@ test('rebuildAll + kpiQuery: 总量/命中率/成本/峰值/激活数', () => {
   assert.equal(k.streakDays, 2, '两个连续本地日都有数据 → 连续 2 天(锚点与宿主时区无关)')
 })
 
+test('连续使用天数:回溯上限足够长(否则长期用户会被静默截断)', () => {
+  // 思路来自一次真实教训:上限原先写 3700 天(约 10 年),超过就静默停在 3700;
+  // 而当时的测试只覆盖 0 天与 2 天,这种截断完全测不出来。
+  // 上限只在"连续天数 > 上限"时才生效,所以必须真造出超过旧上限的连续日。
+  const DAYS = 4000 // > 旧上限 3700
+  const anchor = new Date(2026, 7, 25, 12, 0, 0, 0).getTime()
+  const store = emptyStore()
+  const list = []
+  for (let i = 0; i < DAYS; i++) {
+    // 从 anchor 往前推 DAYS-1 天,一直连到 anchor 当天(每天都有一条记录)
+    const t = anchor - (DAYS - 1 - i) * 24 * 3600 * 1000
+    // 锚在每天正午:避免 DST/时区把日期挤到相邻天
+    const d = new Date(t)
+    d.setHours(12, 0, 0, 0)
+    list.push({ t: d.getTime(), m: 'deepseek-official:deepseek-chat', miss: 10, read: 0, write: 0, out: 5, cost: 0, saved: 0, priced: true })
+  }
+  store.requests = { 's-long': list }
+  store.sessions = { 's-long': { id: 's-long', firstTs: list[0].t, lastTs: list[list.length - 1].t, meta: {} } }
+  store.watermarks = {}
+  rebuildAll(store)
+  const k = kpiQuery(store, 'all', null, null, makeFilter({}), anchor)
+  assert.ok(k.streakDays > 3700,
+    `连续 ${DAYS} 天必须全部回溯到(实际 ${k.streakDays})—— 上限若被打回 3700 就会在这里失败`)
+})
+
 test('筛选:模型 / 会话 / 工作目录', () => {
   const store = buildStore()
   const k1 = kpiQuery(store, 'all', null, null, makeFilter({ models: 'deepseek-official:deepseek-chat' }), NOW)
@@ -156,26 +208,47 @@ test('筛选:模型 / 会话 / 工作目录', () => {
 
 test('聚合快路径与逐记录慢路径输出等价(kpi/series/hours/heatmap/csv)', () => {
   const fastStore = buildStore()
+  // 让慢库**真的**走慢路径。
+  //
+  // 原先的构造是"删掉 model.sessions → aggregatesReady=false",但这达不到目的:
+  // 每个查询函数开头都会 flushAggregates,而它看到"形状未就绪"会**当场 rebuildAll
+  // 把索引补回来** —— 于是这个所谓"慢库"在查询时已经变成快库,断言退化成
+  // "快路径和自己比"。实测两个 store 都是 0 次逐记录访问,用例是空转的。
+  //
+  // markScanning 是唯一压得住 flush 的手段(扫描窗口内 flushAggregates 拒绝重建),
+  // 用它才能把慢路径真正钉住。两个 store 的数据完全相同,差别只在走哪条路。
   const slowStore = structuredClone(fastStore)
-  // 破坏逐会话日索引 → aggregatesReady=false,强制走逐记录路径
-  for (const dk of Object.keys(slowStore.days)) {
-    for (const mk of Object.keys(slowStore.days[dk].models)) delete slowStore.days[dk].models[mk].sessions
-  }
-  assert.equal(aggregatesReady(fastStore), true)
-  assert.equal(aggregatesReady(slowStore), false)
+  const fastProbe = makeFilter(null)
+  assert.equal(aggregatesReady(fastStore), true, '快库必须就绪')
+  // 先验证"慢库确实走了慢路径",否则等价断言又会退化成空转
+  const slowReads = countRecordTReads(slowStore, () => {
+    markScanning(slowStore, true)
+    try { kpiQuery(slowStore, 'all', null, null, fastProbe, NOW) } finally { markScanning(slowStore, false) }
+  })
+  assert.ok(slowReads > 0, `慢路径必须真的读取逐记录(实际 ${slowReads} 次)`)
+  const fastReads = countRecordTReads(fastStore, () => kpiQuery(fastStore, 'all', null, null, fastProbe, NOW))
+  assert.equal(fastReads, 0, `快路径不得触碰逐记录(实际 ${fastReads} 次)`)
+
   const now = NOW
   for (const useModel of [null, 'deepseek-official:deepseek-chat']) {
     const fFast = makeFilter(useModel ? { models: useModel } : null)
     const fSlow = makeFilter(useModel ? { models: useModel } : null)
-    approx(kpiQuery(fastStore, 'all', null, null, fFast, now), kpiQuery(slowStore, 'all', null, null, fSlow, now))
-    approx(kpiQuery(fastStore, 'today', null, null, fFast, now), kpiQuery(slowStore, 'today', null, null, fSlow, now), 1e-9, 'kpi.today')
-    approx(kpiQuery(fastStore, 'month', null, null, fFast, now), kpiQuery(slowStore, 'month', null, null, fSlow, now), 1e-9, 'kpi.month')
-    approx(seriesQuery(fastStore, 'day', 'all', null, null, fFast, now), seriesQuery(slowStore, 'day', 'all', null, null, fSlow, now), 1e-9, 'series.day')
-    approx(seriesQuery(fastStore, 'week', 'all', null, null, fFast, now), seriesQuery(slowStore, 'week', 'all', null, null, fSlow, now), 1e-9, 'series.week')
-    approx(seriesQuery(fastStore, 'month', 'all', null, null, fFast, now), seriesQuery(slowStore, 'month', 'all', null, null, fSlow, now), 1e-9, 'series.month')
-    approx(hoursQuery(fastStore, 'all', null, null, fFast, now), hoursQuery(slowStore, 'all', null, null, fSlow, now), 1e-9, 'hours')
-    approx(heatmapQuery(fastStore, 12, fFast, now), heatmapQuery(slowStore, 12, fSlow, now), 1e-9, 'heatmap')
-    assert.equal(exportCsv(fastStore, 'all', null, null, fFast, now), exportCsv(slowStore, 'all', null, null, fSlow, now), 'csv')
+    // 慢库整段锁在"扫描中":所有查询都被迫回退逐记录路径
+    markScanning(slowStore, true)
+    try {
+      // 每一轮都确认慢库确实走了慢路径 —— 否则这条用例会悄悄退化成"快路径和自己比"
+      const reads = countRecordTReads(slowStore, () => kpiQuery(slowStore, 'all', null, null, fSlow, now))
+      assert.ok(reads > 0, `慢库必须走逐记录路径(实际读 r.t ${reads} 次)`)
+      approx(kpiQuery(fastStore, 'all', null, null, fFast, now), kpiQuery(slowStore, 'all', null, null, fSlow, now))
+      approx(kpiQuery(fastStore, 'today', null, null, fFast, now), kpiQuery(slowStore, 'today', null, null, fSlow, now), 1e-9, 'kpi.today')
+      approx(kpiQuery(fastStore, 'month', null, null, fFast, now), kpiQuery(slowStore, 'month', null, null, fSlow, now), 1e-9, 'kpi.month')
+      approx(seriesQuery(fastStore, 'day', 'all', null, null, fFast, now), seriesQuery(slowStore, 'day', 'all', null, null, fSlow, now), 1e-9, 'series.day')
+      approx(seriesQuery(fastStore, 'week', 'all', null, null, fFast, now), seriesQuery(slowStore, 'week', 'all', null, null, fSlow, now), 1e-9, 'series.week')
+      approx(seriesQuery(fastStore, 'month', 'all', null, null, fFast, now), seriesQuery(slowStore, 'month', 'all', null, null, fSlow, now), 1e-9, 'series.month')
+      approx(hoursQuery(fastStore, 'all', null, null, fFast, now), hoursQuery(slowStore, 'all', null, null, fSlow, now), 1e-9, 'hours')
+      approx(heatmapQuery(fastStore, 12, fFast, now), heatmapQuery(slowStore, 12, fSlow, now), 1e-9, 'heatmap')
+      assert.equal(exportCsv(fastStore, 'all', null, null, fFast, now), exportCsv(slowStore, 'all', null, null, fSlow, now), 'csv')
+    } finally { markScanning(slowStore, false) }
   }
 })
 
@@ -291,7 +364,7 @@ test('价格覆盖与重置(全盘重算)', () => {
   assert.ok(Math.abs(back - before) < 1e-9, '重置后回到默认价')
 })
 
-test('配置补丁:retention 与 webPagePath 校验,未提及字段保持不变', () => {
+test('配置补丁:retention 校验,未提及字段保持不变', () => {
   const store = buildStore()
   const cfg = applyConfigPatch(store, { retention: { days: 30 }, budget: { monthly: 100 } })
   assert.deepEqual(cfg.retention, { days: 30 })
@@ -304,9 +377,21 @@ test('配置补丁:retention 与 webPagePath 校验,未提及字段保持不变'
   assert.deepEqual(cfg3.retention, { days: 7 })
   // 非法值
   assert.throws(() => applyConfigPatch(store, { retention: -1 }), /non-negative/)
-  assert.throws(() => applyConfigPatch(store, { webPagePath: 'C:\\Users\\x\\id_rsa' }), /\.html/)
-  assert.doesNotThrow(() => applyConfigPatch(store, { webPagePath: 'C:\\pages\\my.html' }))
-  assert.equal(store.config.webPagePath, 'C:\\pages\\my.html')
+})
+
+test('webPagePath 已移除:显式拒绝,且配置视图不再回显它', () => {
+  const store = buildStore()
+  // 0.8.9 移除换肤:该字段只校验扩展名,等于一个"读盘上任意 .html"的原语。
+  // 显式拒绝(而不是静默忽略),否则调用方以为换肤生效了。
+  assert.throws(() => applyConfigPatch(store, { webPagePath: 'C:\\pages\\my.html' }), /移除/)
+  assert.throws(() => applyConfigPatch(store, { webPagePath: 'C:\\Users\\x\\id_rsa' }), /移除/)
+  assert.equal(store.config.webPagePath, undefined, '不得写进配置')
+  assert.equal(configView(store).webPagePath, undefined, '配置视图不得回显')
+  // 老库里残留的该字段一律忽略,也不因此判定库损坏
+  const legacy = buildStore()
+  legacy.config.webPagePath = 'C:\\old\\skin.html'
+  assert.equal(isStoreShapeValid(legacy), true, '残留字段不应被判为损坏')
+  assert.equal(configView(legacy).webPagePath, undefined, '残留字段不得出现在配置视图里')
 })
 
 test('parseQuery:与 URLSearchParams 同口径(+ 为空格,%2B 为字面加号)', () => {

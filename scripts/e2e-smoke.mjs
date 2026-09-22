@@ -128,11 +128,58 @@ const ok = (name) => { pass++; console.log(`✓ ${name}`) }
   assert.equal(l.length, 1, `q 过滤应只命中 sess-1(My Projects),实际 ${l.length}`)
   ok('sessions q 服务端搜索')
 }
-// 5. 跨源 POST 拒绝
+// 5. 跨源 POST 拒绝(经真实 fetch:浏览器会给 Host 与 Origin)
 {
   const res = await fetch(base + '/dsh-token/api/config', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' }, body: '{}' })
   assert.equal(res.status, 403)
   ok('跨源 POST 403')
+}
+// 5a. GET 也必须过栅栏(0.8.9 修复):此前栅栏只在 POST 分支,rebinding 借 GET
+//     就能把 /api/kpi、/api/sessions、/api/export.json、/api/meta 全部读走。
+{
+  const post = (host, path, method) => new Promise((resolve, reject) => {
+    const u = new URL(base + path)
+    const req = http.request({
+      host: u.hostname, port: u.port, path: u.pathname + u.search, method,
+      headers: { host, origin: `http://${host}` },
+    }, resolve)
+    req.on('error', reject)
+    req.end()
+  })
+  for (const path of ['/dsh-token/api/kpi?range=all', '/dsh-token/api/sessions', '/dsh-token/api/meta', '/dsh-token/api/export.json']) {
+    const res = await post('evil.example:3080', path, 'GET')
+    assert.equal(res.statusCode, 403, `敌意 Host 的 GET ${path} 必须 403`)
+  }
+  ok('GET 也过栅栏:敌意 Host 一律 403(四处数据端点)')
+}
+// 5a2. Sec-Fetch-Site: cross-site 是独立于 Host 的第二条线索,同样拒绝
+{
+  const port = server.address().port
+  const res = await new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/dsh-token/api/kpi?range=all', method: 'GET',
+      headers: { host: `127.0.0.1:${port}`, 'sec-fetch-site': 'cross-site' },
+    }, resolve)
+    req.on('error', reject)
+    req.end()
+  })
+  assert.equal(res.statusCode, 403, 'cross-site 请求必须拒绝')
+  ok('Sec-Fetch-Site: cross-site 403')
+}
+// 5a3. 主机名规范化:尾部点与大小写与不带点的是同一台主机,不得误拒
+{
+  const port = server.address().port
+  const get = (host) => new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/dsh-token/api/kpi?range=all', method: 'GET',
+      headers: { host, origin: `http://${host}` },
+    }, resolve)
+    req.on('error', reject)
+    req.end()
+  })
+  assert.equal((await get(`127.0.0.1.:${port}`)).statusCode, 200, '根区写法(尾部点)应放行')
+  assert.equal((await get(`LOCALHOST:${port}`)).statusCode, 200, '大小写不敏感,应放行')
+  ok('主机名规范化:尾部点 / 大小写不再误拒')
 }
 // 5b. DNS rebinding 形态:Origin 与 Host 同为攻击域名(同源等式恒真)也必须拒绝
 {
@@ -170,11 +217,21 @@ const ok = (name) => { pass++; console.log(`✓ ${name}`) }
   assert.equal(res.headers.get('x-content-type-options'), 'nosniff')
   ok('页面安全头(CSP + nosniff)')
 }
-// 6. webPagePath 非 .html 拒绝
+// 6. webPagePath 已移除(0.8.9):不再接受换肤,且不得被当成本地文件读取通道
 {
-  const res = await fetch(base + '/dsh-token/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ webPagePath: 'C:\\Users\\x\\id_rsa' }) })
-  assert.equal(res.status, 400)
-  ok('webPagePath 非 .html 400')
+  const secret = join(home, 'secret.html')
+  writeFileSync(secret, '<html><body>CONFIDENTIAL-E2E</body></html>')
+  const res = await fetch(base + '/dsh-token/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ webPagePath: secret }) })
+  assert.equal(res.status, 400, 'webPagePath 补丁必须被拒绝')
+  assert.match((await res.json()).error, /移除/, '拒绝原因应说明该功能已移除')
+  // 关键:页面必须仍是内置仪表盘,绝不能吐出那个文件的内容
+  const page = await (await fetch(base + '/dsh-token')).text()
+  assert.ok(page.includes('dsh-token'), '页面应仍为内置仪表盘')
+  assert.ok(!page.includes('CONFIDENTIAL-E2E'), '任意本地 .html 的内容绝不能被服务出去')
+  // UNC 路径同样被拒(旧实现会接受并触发对外 SMB 连接)
+  const unc = await fetch(base + '/dsh-token/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ webPagePath: '\\\\evil\\share\\p.html' }) })
+  assert.equal(unc.status, 400, 'UNC 路径必须被拒绝')
+  ok('webPagePath 已移除:本地文件不可被读出,UNC 亦被拒')
 }
 // 7. body 超限 413
 {

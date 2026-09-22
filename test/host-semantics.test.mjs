@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 import {
   emptyStore, rebuildAll, applyConfigPatch, makeFilter, kpiQuery, hoursQuery,
   sessionDetailQuery, newTotals, aggregate, isStoreShapeValid, beijingDayOf, dayKeyOf, monthKeyOf,
-  beijingHourOf, isPeakHour, peakSchedule, STORE_VERSION,
+  beijingHourOf, isPeakHour, peakSchedule, STORE_VERSION, flushAggregates,
 } from '../lib/core.mjs'
 
 /** 北京时间 → epoch ms(北京时间 = UTC+8),不受运行环境 TZ 影响 */
@@ -167,21 +167,44 @@ test('kpi:有用量时 peakDay 指向用量最大的那一天', () => {
 
 // ---------------------------------------------------------------------------
 // 4. 配置变更后的惰性重建:对外语义必须与"立刻重建"等价
+//
+// 0.8.9 起逐记录成本**不再是访问器**(见 core.mjs 里 defineLazyCost 的替代说明:
+// 每条记录 3 个 getter 换来 9 倍内存与 2.6 倍序列化开销,而生产读路径本来就都先
+// flush)。契约因此变成:补丁只置脏(O(1)),**任何一次读取之前先 flush 一次**,
+// 结果与"补丁时立刻重建"完全一致。
 // ---------------------------------------------------------------------------
-test('改单价后立刻读 r.cost 就是新价(惰性重建不得改变可观察行为)', () => {
+test('改单价后 flush 一次即得新价(惰性重建不得改变可观察行为)', () => {
   const store = storeWithOne(bj(2026, 9, 8, 10), 'deepseek-official:deepseek-flash', { miss: 1e6 })
   rebuildAll(store)
   assert.equal(store.requests.s1[0].cost, 2, '默认高峰价 ¥2/M')
   applyConfigPatch(store, { prices: { 'deepseek-official:deepseek-flash': { miss: 3, hit: 0, write: 0, output: 0 } } })
-  assert.equal(store.requests.s1[0].cost, 3, '改价后第一次读就必须是新价')
+  // 补丁本身必须是 O(1):不触碰任何逐记录字段
+  assert.equal(store.requests.s1[0].cost, 2, '补丁不该逐条重算(那是 O(请求数))')
+  flushAggregates(store)
+  assert.equal(store.requests.s1[0].cost, 3, 'flush 后即新价')
 })
 
-test('改时段规则后立刻读 r.cost 就是新档(高峰→空闲)', () => {
+test('改时段规则后 flush 一次即得新档(高峰→空闲)', () => {
   const store = storeWithOne(bj(2026, 9, 8, 10), 'deepseek-official:deepseek-flash', { miss: 1e6 })
   rebuildAll(store)
   assert.equal(store.requests.s1[0].cost, 2, '默认规则下 10:00 是高峰')
   applyConfigPatch(store, { peakHours: '20-23' })
+  flushAggregates(store)
   assert.equal(store.requests.s1[0].cost, 1, '改规则后同一时刻改判空闲 → 空闲价')
+})
+
+test('逐记录成本是普通数据属性,不是访问器(0.8.9:去掉 9 倍内存放大)', () => {
+  const store = storeWithOne(bj(2026, 9, 8, 10), 'deepseek-official:deepseek-flash', { miss: 1e6 })
+  rebuildAll(store)
+  const r = store.requests.s1[0]
+  for (const k of ['cost', 'saved', 'priced']) {
+    const d = Object.getOwnPropertyDescriptor(r, k)
+    assert.ok(d, `${k} 必须是自有属性`)
+    assert.equal(d.get, undefined, `${k} 不得是访问器(否则 V8 会打成字典模式)`)
+    assert.equal(typeof d.value, 'number', `${k} 必须是普通数值字段`)
+  }
+  // 无 Symbol 残留(旧实现挂了一个 LAZY 位)
+  assert.equal(Object.getOwnPropertySymbols(r).length, 0, '记录上不该再有任何 Symbol 位')
 })
 
 test('连续多次配置补丁只在第一次读取时重建一次(聚合入口同样要 flush)', () => {
@@ -221,6 +244,9 @@ test('isStoreShapeValid:截断/类型错乱的库一律判不合格(否则会被
   assert.equal(isStoreShapeValid({ requests: {}, watermarks: null }), false, '缺 watermarks 形状')
 })
 
-test('STORE_VERSION 已随小时桶口径升级(改口径必须升版本,否则老库沿用旧口径)', () => {
-  assert.equal(STORE_VERSION, 6)
+test('STORE_VERSION 已随落盘格式升级(改格式/口径必须升版本,否则老库按错格式解析)', () => {
+  // v6 → v7(0.9.0):落盘改为紧凑编码(数组行 + 模型表 + 略去派生字段)。
+  // v7 → v8(0.9.1):分片的模型表由"全局一张"改为"每分片自带"(修静默模型错位)。
+  // 版本不动的话,载入端无法判断该按哪种格式解析 —— 这是**格式契约**,必须显式钉住。
+  assert.equal(STORE_VERSION, 8)
 })

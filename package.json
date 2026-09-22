@@ -1,6 +1,6 @@
 {
   "name": "@fufuf-c/dsh-token",
-  "version": "0.7.1",
+  "version": "0.9.5",
   "description": "DSH 本地 Token 使用统计仪表盘:四段 Token 构成、缓存省钱、会话下钻、全局筛选、预算与导出。全本地,零上传。",
   "type": "module",
   "main": "lib/index.js",
@@ -10,20 +10,25 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
-    "web",
+    "lib/index.js",
+    "lib/core.mjs",
+    "lib/session-source.mjs",
+    "lib/client.js",
+    "web/index.html",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node scripts/build-tokens.mjs --check && node --test",
+    "test": "node scripts/build-tokens.mjs --check && node scripts/build-web.mjs --check && node --test",
     "tokens": "node scripts/build-tokens.mjs",
+    "web": "node scripts/build-web.mjs",
     "verify": "node scripts/build.mjs",
     "e2e": "node scripts/e2e-smoke.mjs",
     "verify:tarball": "node scripts/verify-tarball.mjs",
-    "prepack": "node scripts/build-tokens.mjs --check && node scripts/build.mjs && node --test"
+    "verify:profile": "node scripts/verify-profile-install.mjs",
+    "prepack": "node scripts/build-tokens.mjs --check && node scripts/build-web.mjs --check && node scripts/build.mjs && node --test"
   },
   "dsh": {
     "bundle": {
@@ -40,12 +45,13 @@
       ]
     },
     "engines": {
-      "dsh": ">=0.1.2-rc.1"
+      "dsh": ">=0.1.5-rc.1 || >=0.1.6-0"
     },
     "compatibility": {
       "dshReleases": {
         "0.1.2-rc.1": "compatible",
-        "0.1.5-rc.2": "compatible"
+        "0.1.5-rc.2": "compatible",
+        "0.1.6-alpha.1": "compatible"
       }
     }
   },

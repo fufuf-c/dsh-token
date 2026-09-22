@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+/** 隔离清单测试用的固定时间戳(避免 fmtDate 因运行时刻不同而产出不同文本)。 */
+const T0_FOR_QUAR = Date.UTC(2026, 8, 21, 3, 0, 0)
 
 /** 足够宽的假元素:属性可读写,未知方法一律 no-op */
 function fakeEl() {
@@ -86,6 +88,18 @@ const sandbox = {
 }
 sandbox.window = sandbox
 sandbox.globalThis = sandbox
+// boot() 现在**同步**调用 bindChrome()(不再等 /meta 成功回调),因此这个桩必须
+// 提供 window 级的事件接口。此前桩里没有,只是因为 bindChrome 恰好排在
+// 永不 resolve 的 fetch 之后、从未被执行到 —— 那是"测试没跑到"而非"代码不需要"。
+sandbox.addEventListener = () => {}
+sandbox.removeEventListener = () => {}
+sandbox.matchMedia = sandbox.matchMedia || (() => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+sandbox.scrollTo = () => {}
+sandbox.scrollY = 0
+sandbox.devicePixelRatio = 1
+sandbox.innerWidth = 1280
+sandbox.innerHeight = 800
+sandbox.clipboard = { writeText: async () => {} }
 // boot() 会同步用到一批 Web 标准全局;vm 上下文默认没有,按需透传真实实现
 for (const g of ['URLSearchParams', 'URL', 'TextEncoder', 'TextDecoder', 'Blob', 'AbortController',
   'AbortSignal', 'Event', 'CustomEvent', 'Intl', 'encodeURIComponent', 'decodeURIComponent',
@@ -345,4 +359,47 @@ test('读不到 DSH 配置时关闭过滤并说明,而不是清空列表', () =>
   const html = render({ ...META, configuredModels: null }, cfgWith({}))
   assert.match(html, /读不到 DSH 模型配置,已显示全部 4 个/)
   assert.ok(html.includes('openrouter:stealth/ox-alpha'), '降级时必须显示全部')
+})
+
+// ---------------------------------------------------------------------------
+// 隔离清单(0.9.5):服务端一直在 meta 里报,但页面此前从未渲染
+// ---------------------------------------------------------------------------
+test('设置页必须展示被跳过的会话,并说明它们**不会**被静默清零', () => {
+  const html = render({
+    ...META,
+    quarantinedCount: 2,
+    quarantined: [
+      { id: 'session-old-1', name: 'SessionFormatUnsupportedError', message: 'unsupported v0 event', at: T0_FOR_QUAR, hits: 3 },
+      { id: 'session-old-2', name: 'SessionPersistenceCorruptionError', message: 'bad chunk', at: T0_FOR_QUAR - 1000, hits: 1 },
+    ],
+  }, cfgWith({}))
+  assert.match(html, /数据完整性/, '必须有这一节')
+  assert.match(html, /被跳过的会话 2 个/)
+  assert.ok(html.includes('session-old-1') && html.includes('session-old-2'), '每个被跳过的会话都要列出')
+  assert.match(html, /SessionFormatUnsupportedError/)
+  assert.match(html, /上一次成功扫描/, '必须说清"不会静默清零",否则用户会以为数据丢了')
+})
+
+test('隔离数超出服务端上限时必须说明"仅列出前 N / 共 M"', () => {
+  const many = []
+  for (let i = 0; i < 50; i++) many.push({ id: `q${i}`, name: 'E', message: 'm', at: T0_FOR_QUAR, hits: 1 })
+  const html = render({ ...META, quarantinedCount: 137, quarantined: many }, cfgWith({}))
+  assert.match(html, /被跳过的会话 137 个/)
+  assert.match(html, /仅列出前 50 个/)
+  assert.match(html, /共 137 个/)
+})
+
+test('没有隔离会话时不出现"数据完整性"一节(不制造噪音)', () => {
+  const html = render({ ...META, quarantinedCount: 0, quarantined: [] }, cfgWith({}))
+  assert.doesNotMatch(html, /数据完整性/)
+})
+
+test('隔离条目的错误消息必须转义(它来自宿主解码器的报错文本)', () => {
+  const html = render({
+    ...META,
+    quarantinedCount: 1,
+    quarantined: [{ id: 'x', name: 'E', message: '<img src=x onerror=alert(1)>', at: T0_FOR_QUAR, hits: 1 }],
+  }, cfgWith({}))
+  assert.ok(!html.includes('<img src=x onerror'), '隔离消息不得原样落入 HTML')
+  assert.match(html, /&lt;img/)
 })

@@ -192,3 +192,44 @@ test('宿主适配:仪表盘页与面板走同一个宿主字体钩子', () => {
   assert.doesNotMatch(body, /(?:^|[;\s])font:\s*\d/,
     '仪表盘页同样不允许 font 简写写死字体栈')
 })
+
+/**
+ * 上一条只锁住了 `.dtk-app` **根选择器**——面板里 28 处固定 px 的 font-size
+ * 就在它下一层,于是测试全绿而用户改「外观」字号时面板几乎不动。
+ * 这条把它变成机制:面板区域里**每一处** font-size 必须是
+ *   - 接宿主变量(var(--dsh-content-font-size) / var(--dsh-content-font-delta)),
+ *   - 或显式登记在下面的「展示性字号」白名单里(带理由)。
+ * 白名单只允许 hero 大数字与费用 —— 它们是视觉锚点,跟着正文轴放大会撑破版面。
+ */
+test('宿主适配:面板区域每一处字号都必须接宿主字号轴(白名单之外零例外)', () => {
+  const src = read('lib/client.js')
+  const css = src.slice(src.indexOf('style.textContent = `') + 'style.textContent = `'.length, src.indexOf('\n`\n'))
+  // 只检查"产品面板"区域;外壳(.dtk-frame/.dtk-panel/.dtk-row/.dtk-open)跟随宿主,
+  // 它们本来就用 var(--dsh-content-font-size) 或宿主 alias,不在本条约束内。
+  // 侧边栏入口自 0.8.7 起不再自绘(注册进 sidebar.panellist,行样式全由外壳画),
+  // 所以旧清单里的 .dtk-entry 已不存在 —— 留着它会让这条测试悄悄少查一段。
+  const shellSelectors = ['.dtk-frame', '.dtk-panel', '.dtk-row', '.dtk-open']
+  const fakePanel = css
+    .split('\n')
+    .filter((line) => !shellSelectors.some((s) => line.trim().startsWith(s)))
+    .join('\n')
+
+  const DISPLAY_ALLOWLIST = [
+    // hero 主数字:展示性图形字号(有上方注释说明)
+    '.dtk-hero-num{font-size:42px',
+    '.dtk-hero-num .unit{font-size:15px',
+    '.dtk-cost b{font-size:24px',
+  ]
+  const offenders = []
+  for (const line of fakePanel.split('\n')) {
+    const m = line.match(/font-size:\s*([^;}]+)/)
+    if (!m) continue
+    const val = m[1].trim()
+    if (val.includes('var(--dsh-content-font-size') || val.includes('var(--dsh-content-font-delta')) continue
+    if (DISPLAY_ALLOWLIST.some((a) => line.includes(a))) continue
+    offenders.push(line.trim().slice(0, 110))
+  }
+  assert.deepEqual(offenders, [],
+    '面板里出现未接宿主字号轴的固定字号 —— 用户改「外观」字号时这些文字不会跟随。\n' +
+    '要么改成 calc(<n>px + var(--dsh-content-font-delta,0px)),要么加进 DISPLAY_ALLOWLIST 并说明理由。')
+})

@@ -1,0 +1,162 @@
+</head>
+<body>
+
+<!-- ============ TAB 1 · 今天(健身摘要式) ============ -->
+<section class="page on" id="page-today">
+  <div class="navbar" data-nav="today">
+    <span class="ndate" id="today-eyebrow">—</span>
+    <span class="ntitle">今天</span>
+    <div class="nacts">
+      <button class="ibtn" data-act="filters" aria-label="筛选" title="筛选">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        <span class="dot hide" data-act="fdot"></span>
+      </button>
+      <button class="ibtn" data-act="theme" aria-label="切换主题" title="切换主题">
+        <svg class="ic-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M8 21h8M12 17v4"/></svg>
+        <svg class="ic-sun hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77"/></svg>
+        <svg class="ic-moon hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="pagehead">
+    <h1>今天</h1>
+  </div>
+  <main class="pagebody" id="today-body">
+    <div class="skel"></div><div class="skel"></div><div class="skel"></div>
+  </main>
+  <div class="foot-note">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+    数据只来自本机会话日志,不上传、不联网
+  </div>
+</section>
+
+<!-- ============ TAB 2 · 活动(屏幕使用时间式) ============ -->
+<section class="page" id="page-activity">
+  <div class="navbar" data-nav="activity">
+    <span class="ntitle">活动</span>
+    <div class="nacts">
+      <button class="ibtn" data-act="filters" aria-label="筛选" title="筛选">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        <span class="dot hide" data-act="fdot"></span>
+      </button>
+      <button class="ibtn" data-act="refresh" aria-label="刷新" title="重新加载">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+      </button>
+      <button class="ibtn" data-act="share" aria-label="复制分享链接" title="复制分享链接">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.4l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.1-.4l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="pagehead">
+    <h1>活动</h1>
+  </div>
+  <!-- 范围是**跨页全局**(同时改「会话」页与「今天」页,见 fParams/loadTab),所以
+       它必须住在卡片外面、并自带「范围」行标签。原先 7 个按钮 + 说明 + 筛选胶囊
+       全塞在 H1 下面,读起来像"标题的第 8 个标签";而「自定义」混在 6 个预设里,
+       点它却得不到任何范围(空 from/to 等于「全部」),只是把页面标成"已筛选"。 -->
+  <div class="scopebar">
+    <span class="sclabel">范围</span>
+    <div class="seg" id="f-range" role="group" aria-label="时间范围">
+      <button data-r="today">今天</button>
+      <button data-r="3d">近 3 天</button>
+      <button data-r="7d">近 7 天</button>
+      <button data-r="30d">近 30 天</button>
+      <button data-r="month">本月</button>
+      <button data-r="all" class="on">全部</button>
+    </div>
+    <!-- 自定义是**模式**不是预设:常驻在预设旁边,不占分段里的一格 -->
+    <span id="range-chip"></span>
+    <span class="card-note scopenote">作用于全部卡片</span>
+  </div>
+  <div class="scopebar"><div class="fchips" id="filter-chips"></div></div>
+  <main class="pagebody" id="activity-body">
+    <div class="skel"></div><div class="skel"></div><div class="skel"></div>
+  </main>
+</section>
+
+<!-- ============ TAB 3 · 会话 ============ -->
+<section class="page" id="page-sessions">
+  <div class="navbar" data-nav="sessions">
+    <span class="ntitle">会话</span>
+    <div class="nacts"></div>
+  </div>
+  <div class="pagehead">
+    <h1>会话</h1>
+  </div>
+  <main class="pagebody">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div class="search" style="flex:1;min-width:200px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="sess-search" type="text" placeholder="搜索工作区或会话 ID" aria-label="搜索会话">
+        <button class="clr hide" id="sess-clr" aria-label="清除搜索">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="seg sm" id="s-seg" role="group" aria-label="会话排序">
+        <button data-s="recent" class="on">最近</button>
+        <button data-s="cost">花费</button>
+        <button data-s="tokens">Tokens</button>
+      </div>
+    </div>
+    <div class="card list">
+      <div class="glist" id="sessions-body">
+        <div class="skel"></div>
+      </div>
+    </div>
+  </main>
+</section>
+
+<!-- ============ TAB 4 · 设置 ============ -->
+<section class="page" id="page-settings">
+  <div class="navbar" data-nav="settings">
+    <span class="ntitle">设置</span>
+    <div class="nacts"></div>
+  </div>
+  <div class="pagehead">
+    <h1>设置</h1>
+  </div>
+  <main class="pagebody" id="settings-body">
+    <div class="skel"></div><div class="skel"></div>
+  </main>
+  <div class="foot-note" id="settings-foot">Token 用量 · 由本机会话日志计算</div>
+</section>
+
+<!-- ============ push 详情页(会话) ============ -->
+<section class="pushpage" id="page-detail" aria-hidden="true">
+  <div class="navbar" data-nav="detail">
+    <button class="nback" id="detail-back">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
+      会话
+    </button>
+    <span class="ntitle">会话详情</span>
+    <div class="nacts"></div>
+  </div>
+  <div class="pagehead"><h1 id="detail-title">会话详情</h1></div>
+  <main class="pagebody" id="detail-body"></main>
+</section>
+
+<!-- ============ 悬浮 Liquid Glass 标签栏 ============ -->
+<nav class="tabbar" id="tabbar" aria-label="主导航">
+  <button class="tb on" data-tab="today" aria-label="今天">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>
+    <span>今天</span>
+  </button>
+  <button class="tb" data-tab="activity" aria-label="活动">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><path d="M5.5 20v-7M10.8 20V6.5M16.1 20v-9M21 20v-4.5"/><path d="M3 20.2h19.5"/></svg>
+    <span>活动</span>
+  </button>
+  <button class="tb" data-tab="sessions" aria-label="会话">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    <span>会话</span>
+  </button>
+  <button class="tb" data-tab="settings" aria-label="设置">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>
+    <span>设置</span>
+  </button>
+</nav>
+
+<div id="sheet-root"></div>
+<div id="tip" hidden></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>

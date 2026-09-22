@@ -393,3 +393,111 @@ test('isConfiguredModel: exact 优先,byId 兜底', () => {
   assert.equal(isConfiguredModel(null, 's:kimi-k3'), false, 'null 一律不命中')
 })
 
+// ---------------------------------------------------------------------------
+// 「后端报告 0 会话」不得清库
+//
+// 这是**真实发生过**的破坏,不是防御性编程的臆想:本插件的宿主测试用
+// `list() { return [] }` 的桩装载 lib/index.js(而 DSH_HOME 恰好是真实目录),
+// scanStore 于是判定"53 个会话全被删了"并逐个 delete,再被 Host 落盘 ——
+// 一份 53 会话 / 6801 请求的真实库被清成 882 字节的空索引。会话日志没丢
+// (库可从日志重建),但那是一次不该发生的静默数据损失。
+//
+// list() 返回空的两种原因必须分开:
+//   (a) 用户真的删光了会话 —— 极罕见;
+//   (b) 后端这一轮没准备好(目录挂载慢 / root 指错 / 服务刚重启未扫盘)。
+// 原实现对两者一视同仁,把 (b) 当成 (a) 处理。
+// ---------------------------------------------------------------------------
+test('scanStore: 后端报告 0 会话时必须延后清理(库中已有会话)', async () => {
+  const store = emptyStore()
+  // 先正常折一遍,让库里有两个会话
+  const sessions = { s1: { revision: 1, events: usageEvents(1, T) }, s2: { revision: 1, events: usageEvents(1, T + 1000) } }
+  await scanStore(store, fakePersistence(sessions), { nowMs: T + 7200000 })
+  assert.equal(Object.keys(store.requests).length, 2, '前置:库里应有两个会话')
+
+  // 换一个"还没准备好"的后端:list() 返回空
+  const empty = { async list() { return [] }, async open() { throw new Error('不该被调用') } }
+  const summary = await scanStore(store, empty, { nowMs: T + 7300000 })
+
+  assert.equal(summary.removed, 0, '第一轮空列表不得删除任何会话')
+  assert.equal(Object.keys(store.requests).length, 2, '会话记录必须完好')
+  assert.equal(Object.keys(store.watermarks).length, 2, '水位线必须完好')
+  assert.equal(Object.keys(store.sessions).length, 2, '会话元数据必须完好')
+  assert.equal(summary.dirty, false, '什么都没做 → 不该触发落盘')
+  assert.ok(summary.note && /延后|0 个会话/.test(summary.note), `必须如实回报原因,实际 ${JSON.stringify(summary.note)}`)
+})
+
+test('scanStore: 连续两轮空列表才真清(用户确实删光了会话时不能永远不清)', async () => {
+  // 守卫不能变成"会话永远删不掉"。连续两轮确认是"后端瞬时故障"与
+  // "用户真删光了"的分界:前者下一轮就恢复,后者两轮都空。
+  const store = emptyStore()
+  const sessions = { s1: { revision: 1, events: usageEvents(1, T) }, s2: { revision: 1, events: usageEvents(1, T + 1000) } }
+  await scanStore(store, fakePersistence(sessions), { nowMs: T + 7200000 })
+  assert.equal(Object.keys(store.requests).length, 2)
+
+  const empty = { async list() { return [] }, async open() { throw new Error('不该被调用') } }
+  const first = await scanStore(store, empty, { nowMs: T + 7300000 })
+  assert.equal(first.removed, 0, '第一轮:延后')
+  const second = await scanStore(store, empty, { nowMs: T + 7400000 })
+  assert.equal(second.removed, 2, '第二轮:确认后必须真删(否则已删会话的分片永远残留)')
+  assert.equal(Object.keys(store.requests).length, 0)
+  assert.equal(Object.keys(store.watermarks).length, 0)
+})
+
+test('scanStore: 中间恢复过一轮就重新计数(不得靠陈旧计数误清)', async () => {
+  // 后端抖动:空 → 正常 → 空。第二次空又是"第一次",必须继续延后。
+  // 若计数不重置,这里会误判成"连续两轮空"而清库。
+  const store = emptyStore()
+  const sessions = { s1: { revision: 1, events: usageEvents(1, T) }, s2: { revision: 1, events: usageEvents(1, T + 1000) } }
+  const normal = fakePersistence(sessions)
+  await scanStore(store, normal, { nowMs: T + 7200000 })
+
+  const empty = { async list() { return [] }, async open() { throw new Error('不该被调用') } }
+  await scanStore(store, empty, { nowMs: T + 7300000 })       // 空(第 1 次)
+  await scanStore(store, normal, { nowMs: T + 7350000 })      // 恢复:计数必须清零
+  const again = await scanStore(store, empty, { nowMs: T + 7400000 })  // 空(又是第 1 次)
+  assert.equal(again.removed, 0, '中间恢复过就必须重新计数,不能清库')
+  assert.equal(Object.keys(store.requests).length, 2)
+})
+
+test('scanStore: force 全量扫描同样不得在首轮空列表上清库', async () => {
+  // force 是"忽略水位线重折一遍"的出口,不是"忽略哪些会话存在"的出口 ——
+  // 它不该改变删除判定。
+  const store = emptyStore()
+  const sessions = { s1: { revision: 1, events: usageEvents(1, T) } }
+  await scanStore(store, fakePersistence(sessions), { nowMs: T + 7200000, force: true })
+  assert.equal(Object.keys(store.requests).length, 1)
+
+  const empty = { async list() { return [] }, async open() { throw new Error('不该被调用') } }
+  const summary = await scanStore(store, empty, { nowMs: T + 7300000, force: true })
+  assert.equal(Object.keys(store.requests).length, 1, 'force 也不得在首轮清空')
+  assert.equal(summary.removed, 0)
+})
+
+test('scanStore: 空库碰到空列表是正常的,不该报警', async () => {
+  // 首次安装 / 全新用户:库里本来什么都没有,list() 空是**正确**状态。
+  // 这条防止守卫过度触发(把正常路径也拦下来,用户就永远扫不到数据)。
+  const store = emptyStore()
+  const empty = { async list() { return [] }, async open() { throw new Error('不该被调用') } }
+  const summary = await scanStore(store, empty, { nowMs: T })
+  assert.equal(summary.ok, true)
+  assert.equal(summary.removed, 0)
+  assert.equal(summary.note, undefined, '空库不该带"已延后清理"的警告')
+  assert.ok(summary.totalSessions === 0)
+})
+
+test('scanStore: 会话**真的**被删掉时必须照常清理(守卫不得挡住正常删除)', async () => {
+  // 上面几条守的是"空列表"这个特例。这里锁住正常删除路径没被误伤:
+  // 后端列出的会话少了几个(但不是零),消失的那些必须立刻被清掉、不必等两轮。
+  const store = emptyStore()
+  const both = { s1: { revision: 1, events: usageEvents(1, T) }, s2: { revision: 1, events: usageEvents(1, T + 1000) } }
+  await scanStore(store, fakePersistence(both), { nowMs: T + 7200000 })
+  assert.equal(Object.keys(store.requests).length, 2)
+
+  const onlyOne = { s1: { revision: 1, events: usageEvents(1, T) } }
+  const summary = await scanStore(store, fakePersistence(onlyOne), { nowMs: T + 7300000 })
+  assert.equal(summary.removed, 1, '消失的 s2 必须被清理')
+  assert.deepEqual(Object.keys(store.requests), ['s1'])
+  assert.equal(store.watermarks.s2, undefined)
+  assert.equal(store.sessions.s2, undefined)
+})
+
